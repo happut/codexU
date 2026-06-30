@@ -23,12 +23,14 @@ OpenAI Codex usage tracker, Codex quota tracker, Codex token usage, ChatGPT Code
 - Builds a daily task board from local Codex threads and enabled Codex automations.
 - Groups work into active, pending, scheduled, and done columns.
 - Stays on the desktop layer by default, with one-key foreground toggle.
+- Supports Chinese and English UI text. The default language follows the system time zone, and the top `中 | EN` switch can override it.
 - Runs locally. The widget reads local Codex files and local Codex app-server responses; it does not upload usage data to a third-party service.
 
 ## Keyboard Shortcuts
 
 - `Command + U`: toggle the widget between desktop layer and foreground layer.
 - Menu bar gauge icon: same toggle as `Command + U`.
+- Top `中 | EN` switch: switch between Chinese and English. Manual selection is kept for the next launch.
 - Refresh button: immediately refresh quota, token usage, trend, and task board.
 - Close button: quit the widget.
 - Drag anywhere on the widget background to reposition it.
@@ -87,8 +89,8 @@ make release
 Release artifacts are written to `dist/`, for example:
 
 ```text
-dist/codexU-0.1.3-mac-arm64.dmg
-dist/codexU-0.1.3-mac-arm64.dmg.sha256
+dist/codexU-0.1.4-mac-arm64.dmg
+dist/codexU-0.1.4-mac-arm64.dmg.sha256
 ```
 
 For Developer ID signing and notarization, see [DISTRIBUTION.md](DISTRIBUTION.md).

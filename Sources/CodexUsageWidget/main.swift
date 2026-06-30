@@ -779,14 +779,14 @@ private func shortWorkspaceName(_ path: String) -> String {
     return path
 }
 
-private func relativeTimeText(_ date: Date) -> String {
+private func relativeTimeText(_ date: Date, language: WidgetLanguage) -> String {
     let seconds = max(0, Int(Date().timeIntervalSince(date)))
-    if seconds < 60 { return "刚刚" }
+    if seconds < 60 { return language.text("刚刚", "just now") }
     let minutes = seconds / 60
-    if minutes < 60 { return "\(minutes) 分钟前" }
+    if minutes < 60 { return language.text("\(minutes) 分钟前", "\(minutes)m ago") }
     let hours = minutes / 60
-    if hours < 24 { return "\(hours) 小时前" }
-    return "\(hours / 24) 天前"
+    if hours < 24 { return language.text("\(hours) 小时前", "\(hours)h ago") }
+    return language.text("\(hours / 24) 天前", "\(hours / 24)d ago")
 }
 
 private func scheduleSummary(_ rrule: String?) -> String {
@@ -851,8 +851,47 @@ private func dateFromEpoch(_ value: Any?) -> Date? {
     return Date(timeIntervalSince1970: seconds)
 }
 
+enum WidgetLanguage: String, CaseIterable, Equatable {
+    case zh
+    case en
+
+    static let storageKey = "codexU.interfaceLanguage"
+
+    static var automatic: WidgetLanguage {
+        let identifier = TimeZone.current.identifier
+        let chineseTimeZones: Set<String> = [
+            "Asia/Shanghai",
+            "Asia/Chongqing",
+            "Asia/Harbin",
+            "Asia/Urumqi",
+            "Asia/Hong_Kong",
+            "Asia/Macau",
+            "Asia/Taipei"
+        ]
+        return chineseTimeZones.contains(identifier) ? .zh : .en
+    }
+
+    var isChinese: Bool { self == .zh }
+
+    static func storedOrAutomatic(defaults: UserDefaults = .standard) -> WidgetLanguage {
+        guard let rawValue = defaults.string(forKey: storageKey),
+              let language = WidgetLanguage(rawValue: rawValue)
+        else { return .automatic }
+        return language
+    }
+
+    func persist(defaults: UserDefaults = .standard) {
+        defaults.set(rawValue, forKey: Self.storageKey)
+    }
+
+    func text(_ zh: String, _ en: String) -> String {
+        isChinese ? zh : en
+    }
+}
+
 struct UsageWidgetView: View {
     @ObservedObject var store: UsageStore
+    @State private var language = WidgetLanguage.storedOrAutomatic()
 
     static let widgetWidth: CGFloat = 820
     static let widgetDefaultHeight: CGFloat = 620
@@ -912,6 +951,10 @@ struct UsageWidgetView: View {
                     .foregroundStyle(.primary)
             }
             Spacer()
+            LanguageSwitch(language: language) { selectedLanguage in
+                language = selectedLanguage
+                selectedLanguage.persist()
+            }
             accountPill
             planPill
             iconButton(systemName: store.isRefreshing ? "hourglass" : "arrow.clockwise") {
@@ -925,7 +968,10 @@ struct UsageWidgetView: View {
 
     private var environmentChecklistSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            SectionTitle(title: "环境检查", detail: "首次使用")
+            SectionTitle(
+                title: language.text("环境检查", "Environment"),
+                detail: language.text("首次使用", "First run")
+            )
             ForEach(environmentDiagnostics) { item in
                 HStack(alignment: .top, spacing: 9) {
                     Image(systemName: item.systemName)
@@ -992,7 +1038,7 @@ struct UsageWidgetView: View {
                     Text(primaryText)
                         .font(.system(size: 38, weight: .bold, design: .rounded))
                         .monospacedDigit()
-                    Text("剩余额度")
+                    Text(language.text("剩余额度", "Remaining"))
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(.secondary)
                 }
@@ -1000,15 +1046,15 @@ struct UsageWidgetView: View {
 
             VStack(alignment: .leading, spacing: 13) {
                 VStack(alignment: .leading, spacing: 11) {
-                    WindowRow(title: "5 小时额度窗口", window: snapshot.primary, accent: Color(red: 0.08, green: 0.62, blue: 0.48))
-                    WindowRow(title: "7 天额度窗口", window: snapshot.secondary, accent: Color(red: 0.18, green: 0.44, blue: 0.72))
+                    WindowRow(title: language.text("5 小时额度窗口", "5-hour quota window"), window: snapshot.primary, accent: Color(red: 0.08, green: 0.62, blue: 0.48), language: language)
+                    WindowRow(title: language.text("7 天额度窗口", "7-day quota window"), window: snapshot.secondary, accent: Color(red: 0.18, green: 0.44, blue: 0.72), language: language)
                 }
 
                 HStack(spacing: 12) {
-                    TokenMetricCard(title: "今日", value: formatTokens(snapshot.local?.todayTokens), tint: Color(red: 0.08, green: 0.62, blue: 0.48))
-                    TokenMetricCard(title: "近 7 天", value: formatTokens(snapshot.local?.sevenDayTokens), tint: Color(red: 0.92, green: 0.58, blue: 0.12))
-                    TokenMetricCard(title: "累计", value: formatTokens(snapshot.local?.lifetimeTokens), tint: Color(red: 0.18, green: 0.44, blue: 0.72))
-                    MiniTrendCard(buckets: snapshot.local?.dailyBuckets ?? [])
+                    TokenMetricCard(title: language.text("今日", "Today"), value: formatTokens(snapshot.local?.todayTokens), tint: Color(red: 0.08, green: 0.62, blue: 0.48), language: language)
+                    TokenMetricCard(title: language.text("近 7 天", "Last 7 days"), value: formatTokens(snapshot.local?.sevenDayTokens), tint: Color(red: 0.92, green: 0.58, blue: 0.12), language: language)
+                    TokenMetricCard(title: language.text("累计", "Lifetime"), value: formatTokens(snapshot.local?.lifetimeTokens), tint: Color(red: 0.18, green: 0.44, blue: 0.72), language: language)
+                    MiniTrendCard(buckets: snapshot.local?.dailyBuckets ?? [], language: language)
                 }
             }
             .frame(maxWidth: .infinity)
@@ -1031,16 +1077,16 @@ struct UsageWidgetView: View {
                     Text(primaryText)
                         .font(.system(size: 23, weight: .bold, design: .rounded))
                         .monospacedDigit()
-                    Text("5h 剩余")
+                    Text(language.text("5h 剩余", "5h left"))
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(.secondary)
                 }
             }
 
             VStack(alignment: .leading, spacing: 10) {
-                SectionTitle(title: "账户额度", detail: quotaDetail)
-                WindowRow(title: "5 小时", window: snapshot.primary, accent: Color(red: 0.08, green: 0.62, blue: 0.48))
-                WindowRow(title: "7 天", window: snapshot.secondary, accent: Color(red: 0.18, green: 0.44, blue: 0.72))
+                SectionTitle(title: language.text("账户额度", "Account quota"), detail: quotaDetail)
+                WindowRow(title: language.text("5 小时", "5 hours"), window: snapshot.primary, accent: Color(red: 0.08, green: 0.62, blue: 0.48), language: language)
+                WindowRow(title: language.text("7 天", "7 days"), window: snapshot.secondary, accent: Color(red: 0.18, green: 0.44, blue: 0.72), language: language)
             }
         }
         .padding(12)
@@ -1049,11 +1095,11 @@ struct UsageWidgetView: View {
 
     private var tokenSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            SectionTitle(title: "Token 消耗", detail: localThreadCountLabel)
+            SectionTitle(title: language.text("Token 消耗", "Token usage"), detail: localThreadCountLabel)
 
             HStack(alignment: .firstTextBaseline, spacing: 14) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("今日")
+                    Text(language.text("今日", "Today"))
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(.secondary)
                     Text(formatTokens(snapshot.local?.todayTokens))
@@ -1064,7 +1110,7 @@ struct UsageWidgetView: View {
                 }
                 Spacer(minLength: 10)
                 VStack(alignment: .trailing, spacing: 3) {
-                    Text("累计")
+                    Text(language.text("累计", "Lifetime"))
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(.secondary)
                     Text(formatTokens(snapshot.local?.lifetimeTokens))
@@ -1076,7 +1122,7 @@ struct UsageWidgetView: View {
             }
 
             HStack {
-                Text("近 7 天合计")
+                Text(language.text("近 7 天合计", "Last 7 days total"))
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -1091,8 +1137,8 @@ struct UsageWidgetView: View {
 
     private var dailyTokenSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            SectionTitle(title: "每日 Token", detail: "近 7 天")
-            DailyTokenChart(buckets: snapshot.local?.dailyBuckets ?? [])
+            SectionTitle(title: language.text("每日 Token", "Daily tokens"), detail: language.text("近 7 天", "Last 7 days"))
+            DailyTokenChart(buckets: snapshot.local?.dailyBuckets ?? [], language: language)
         }
         .padding(12)
         .sectionBackground()
@@ -1100,10 +1146,10 @@ struct UsageWidgetView: View {
 
     private var taskBoardSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            SectionTitle(title: "今日任务看板", detail: taskBoardSummary)
+            SectionTitle(title: language.text("今日任务看板", "Today's task board"), detail: taskBoardSummary)
             HStack(alignment: .top, spacing: 8) {
                 ForEach(taskBoardColumns) { column in
-                    TaskBoardColumnView(column: column)
+                    TaskBoardColumnView(column: column, language: language)
                         .frame(maxWidth: .infinity, alignment: .top)
                 }
             }
@@ -1122,7 +1168,7 @@ struct UsageWidgetView: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
             Spacer()
-            Text("刷新 \(timeOnly(snapshot.refreshedAt))")
+            Text("\(language.text("刷新", "Refreshed")) \(timeOnly(snapshot.refreshedAt, language: language))")
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(.secondary)
             Text("⌘U")
@@ -1132,9 +1178,9 @@ struct UsageWidgetView: View {
     }
 
     private var accountLabel: String {
-        guard let account = snapshot.account else { return "本机统计模式" }
+        guard let account = snapshot.account else { return language.text("本机统计", "Local stats") }
         if account.type == "chatgpt" {
-            return account.emailPresent ? "ChatGPT 登录" : "ChatGPT"
+            return account.emailPresent ? language.text("ChatGPT 登录", "ChatGPT signed in") : "ChatGPT"
         }
         return account.type
     }
@@ -1160,26 +1206,29 @@ struct UsageWidgetView: View {
     }
 
     private var quotaDetail: String {
-        guard let reset = snapshot.primary?.resetsAt else { return "额度状态" }
-        return "5h 重置 \(timeOnly(reset))"
+        guard let reset = snapshot.primary?.resetsAt else { return language.text("额度状态", "Quota status") }
+        return language.text("5h 重置 \(timeOnly(reset, language: language))", "5h resets \(timeOnly(reset, language: language))")
     }
 
     private var localThreadCountLabel: String {
-        guard let count = snapshot.local?.threadCount else { return "本机统计" }
-        return "\(count) 线程"
+        guard let count = snapshot.local?.threadCount else { return language.text("本机统计", "Local stats") }
+        return language.text("\(count) 线程", "\(count) threads")
     }
 
     private var taskBoardSummary: String {
-        guard let board = snapshot.taskBoard else { return "读取中" }
-        return "\(board.totalCount) 事项 · \(timeOnly(board.refreshedAt))"
+        guard let board = snapshot.taskBoard else { return language.text("读取中", "Loading") }
+        return language.text(
+            "\(board.totalCount) 事项 · \(timeOnly(board.refreshedAt, language: language))",
+            "\(board.totalCount) items · \(timeOnly(board.refreshedAt, language: language))"
+        )
     }
 
     private var taskBoardColumns: [TaskColumn] {
         snapshot.taskBoard?.columns ?? [
-            TaskColumn(id: .active, title: "进行中", count: 0, items: []),
-            TaskColumn(id: .pending, title: "待处理", count: 0, items: []),
-            TaskColumn(id: .scheduled, title: "定时", count: 0, items: []),
-            TaskColumn(id: .done, title: "完成", count: 0, items: [])
+            TaskColumn(id: .active, title: localizedTaskColumnTitle(.active, language: language), count: 0, items: []),
+            TaskColumn(id: .pending, title: localizedTaskColumnTitle(.pending, language: language), count: 0, items: []),
+            TaskColumn(id: .scheduled, title: localizedTaskColumnTitle(.scheduled, language: language), count: 0, items: []),
+            TaskColumn(id: .done, title: localizedTaskColumnTitle(.done, language: language), count: 0, items: [])
         ]
     }
 
@@ -1198,24 +1247,24 @@ struct UsageWidgetView: View {
             if messages.contains("未找到 codex") {
                 items.append(DiagnosticItem(
                     id: "codex-missing",
-                    title: "未找到 Codex",
-                    detail: "请先安装 Codex App，或确认 codex CLI 位于 /Applications/Codex.app、/opt/homebrew/bin 或 /usr/local/bin。",
+                    title: language.text("未找到 Codex", "Codex not found"),
+                    detail: language.text("请先安装 Codex App，或确认 codex CLI 位于 /Applications/Codex.app、/opt/homebrew/bin 或 /usr/local/bin。", "Install Codex App first, or make sure the codex CLI is in /Applications/Codex.app, /opt/homebrew/bin, or /usr/local/bin."),
                     systemName: "magnifyingglass",
                     tint: Color(red: 0.86, green: 0.55, blue: 0.18)
                 ))
             } else if messages.contains("app-server") {
                 items.append(DiagnosticItem(
                     id: "app-server",
-                    title: "Codex 账户接口暂不可用",
-                    detail: "确认 Codex 已登录后点击刷新；本机 token 统计仍可继续显示。",
+                    title: language.text("Codex 账户接口暂不可用", "Codex account API unavailable"),
+                    detail: language.text("确认 Codex 已登录后点击刷新；本机 token 统计仍可继续显示。", "Make sure Codex is signed in, then refresh. Local token stats can still be shown."),
                     systemName: "exclamationmark.triangle.fill",
                     tint: Color(red: 0.86, green: 0.55, blue: 0.18)
                 ))
             } else {
                 items.append(DiagnosticItem(
                     id: "quota-unavailable",
-                    title: "账户额度读取中",
-                    detail: "如果长时间无数据，请确认 Codex 已安装并完成登录。",
+                    title: language.text("账户额度读取中", "Reading account quota"),
+                    detail: language.text("如果长时间无数据，请确认 Codex 已安装并完成登录。", "If data does not appear, make sure Codex is installed and signed in."),
                     systemName: "person.crop.circle.badge.questionmark",
                     tint: Color(red: 0.18, green: 0.44, blue: 0.72)
                 ))
@@ -1226,24 +1275,24 @@ struct UsageWidgetView: View {
             if messages.contains("state_5.sqlite") {
                 items.append(DiagnosticItem(
                     id: "sqlite-db",
-                    title: "未找到本机 Codex 统计库",
-                    detail: "打开 Codex 并至少完成一次会话后，再回到小组件点击刷新。",
+                    title: language.text("未找到本机 Codex 统计库", "Local Codex database not found"),
+                    detail: language.text("打开 Codex 并至少完成一次会话后，再回到小组件点击刷新。", "Open Codex and complete at least one session, then refresh this widget."),
                     systemName: "externaldrive.badge.questionmark",
                     tint: Color(red: 0.86, green: 0.55, blue: 0.18)
                 ))
             } else if messages.contains("sqlite3") {
                 items.append(DiagnosticItem(
                     id: "sqlite-cli",
-                    title: "未找到 sqlite3",
-                    detail: "请安装 macOS Command Line Tools，或通过 Homebrew 安装 sqlite。",
+                    title: language.text("未找到 sqlite3", "sqlite3 not found"),
+                    detail: language.text("请安装 macOS Command Line Tools，或通过 Homebrew 安装 sqlite。", "Install macOS Command Line Tools, or install sqlite with Homebrew."),
                     systemName: "terminal",
                     tint: Color(red: 0.86, green: 0.55, blue: 0.18)
                 ))
             } else {
                 items.append(DiagnosticItem(
                     id: "local-usage",
-                    title: "本机统计暂不可用",
-                    detail: "本机 token 和任务看板依赖 ~/.codex 的本地状态文件。",
+                    title: language.text("本机统计暂不可用", "Local stats unavailable"),
+                    detail: language.text("本机 token 和任务看板依赖 ~/.codex 的本地状态文件。", "Local tokens and the task board depend on Codex state files under ~/.codex."),
                     systemName: "chart.bar.doc.horizontal",
                     tint: Color(red: 0.18, green: 0.44, blue: 0.72)
                 ))
@@ -1254,8 +1303,8 @@ struct UsageWidgetView: View {
             items = snapshot.messages.prefix(3).enumerated().map { index, message in
                 DiagnosticItem(
                     id: "message-\(index)",
-                    title: "运行提示",
-                    detail: message,
+                    title: language.text("运行提示", "Runtime note"),
+                    detail: localizedReaderMessage(message, language: language),
                     systemName: "info.circle.fill",
                     tint: Color(red: 0.18, green: 0.44, blue: 0.72)
                 )
@@ -1272,7 +1321,7 @@ struct UsageWidgetView: View {
     }
 
     private var statusText: String {
-        if let first = snapshot.messages.first { return first }
+        if let first = snapshot.messages.first { return localizedReaderMessage(first, language: language) }
         if snapshot.primary != nil { return "app-server + SQLite" }
         return "SQLite only"
     }
@@ -1291,6 +1340,25 @@ struct SectionTitle: View {
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(.secondary)
         }
+    }
+}
+
+struct LanguageSwitch: View {
+    let language: WidgetLanguage
+    let onSelect: (WidgetLanguage) -> Void
+
+    var body: some View {
+        Picker("", selection: Binding(
+            get: { language },
+            set: { onSelect($0) }
+        )) {
+            Text("中").tag(WidgetLanguage.zh)
+            Text("EN").tag(WidgetLanguage.en)
+        }
+        .labelsHidden()
+        .pickerStyle(.segmented)
+        .controlSize(.mini)
+        .frame(width: 70)
     }
 }
 
@@ -1374,6 +1442,7 @@ struct GaugeRing: View {
 
 struct DailyTokenChart: View {
     let buckets: [DailyTokenBucket]
+    let language: WidgetLanguage
 
     private var maxTokens: Int64 {
         max(buckets.map(\.tokens).max() ?? 0, 1)
@@ -1382,7 +1451,7 @@ struct DailyTokenChart: View {
     var body: some View {
         HStack(alignment: .bottom, spacing: 6) {
             ForEach(buckets) { bucket in
-                DailyTokenBar(bucket: bucket, maxTokens: maxTokens)
+                DailyTokenBar(bucket: bucket, maxTokens: maxTokens, language: language)
             }
         }
         .frame(maxWidth: .infinity)
@@ -1393,6 +1462,7 @@ struct DailyTokenChart: View {
 struct DailyTokenBar: View {
     let bucket: DailyTokenBucket
     let maxTokens: Int64
+    let language: WidgetLanguage
 
     private var barHeight: CGFloat {
         let ratio = Double(bucket.tokens) / Double(maxTokens)
@@ -1415,7 +1485,7 @@ struct DailyTokenBar: View {
                     .fill(bucket.tokens == 0 ? Color.white.opacity(0.22) : Color(red: 0.08, green: 0.62, blue: 0.48))
                     .frame(height: barHeight)
             }
-            Text(bucket.label)
+            Text(localizedDayLabel(bucket.label, language: language))
                 .font(.system(size: 9, weight: .medium))
                 .foregroundStyle(bucket.label == "今天" ? .primary : .secondary)
                 .lineLimit(1)
@@ -1428,6 +1498,7 @@ struct WindowRow: View {
     let title: String
     let window: RateWindow?
     let accent: Color
+    let language: WidgetLanguage
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
@@ -1456,9 +1527,9 @@ struct WindowRow: View {
         guard let window else { return "--" }
         let used = formatUsagePercent(window.usedPercent)
         if let resetsAt = window.resetsAt {
-            return "已用 \(used) · \(resetDateTime(resetsAt)) 重置"
+            return language.text("已用 \(used) · \(resetDateTime(resetsAt, language: language)) 重置", "Used \(used) · resets \(resetDateTime(resetsAt, language: language))")
         }
-        return "已用 \(used)"
+        return language.text("已用 \(used)", "Used \(used)")
     }
 }
 
@@ -1466,6 +1537,7 @@ struct TokenMetricCard: View {
     let title: String
     let value: String
     let tint: Color
+    let language: WidgetLanguage
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -1483,7 +1555,7 @@ struct TokenMetricCard: View {
                 .monospacedDigit()
                 .lineLimit(1)
                 .minimumScaleFactor(0.72)
-            Text("Tokens")
+            Text(language.text("Tokens", "Tokens"))
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(.secondary)
         }
@@ -1502,6 +1574,7 @@ struct TokenMetricCard: View {
 
 struct MiniTrendCard: View {
     let buckets: [DailyTokenBucket]
+    let language: WidgetLanguage
 
     private var maxTokens: Int64 {
         max(buckets.map(\.tokens).max() ?? 0, 1)
@@ -1509,7 +1582,7 @@ struct MiniTrendCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("近 7 天使用趋势")
+            Text(language.text("近 7 天使用趋势", "7-day trend"))
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
@@ -1524,13 +1597,13 @@ struct MiniTrendCard: View {
             .frame(maxWidth: .infinity, alignment: .trailing)
 
             HStack {
-                Text("一")
+                Text(language.text("一", "M"))
                 Spacer()
-                Text("三")
+                Text(language.text("三", "W"))
                 Spacer()
-                Text("五")
+                Text(language.text("五", "F"))
                 Spacer()
-                Text("今")
+                Text(language.text("今", "Now"))
             }
             .font(.system(size: 9, weight: .medium))
             .foregroundStyle(.secondary)
@@ -1556,6 +1629,7 @@ struct MiniTrendCard: View {
 
 struct TaskBoardColumnView: View {
     let column: TaskColumn
+    let language: WidgetLanguage
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -1563,7 +1637,7 @@ struct TaskBoardColumnView: View {
                 Image(systemName: taskColumnIcon(column.id))
                     .font(.system(size: 10, weight: .bold))
                     .foregroundStyle(taskAccentColor(column.id))
-                Text(column.title)
+                Text(localizedTaskColumnTitle(column.id, language: language))
                     .font(.system(size: 11, weight: .semibold))
                     .lineLimit(1)
                 Text("\(column.count)")
@@ -1581,7 +1655,7 @@ struct TaskBoardColumnView: View {
                     Image(systemName: "circle.dashed")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(.tertiary)
-                    Text("暂无")
+                    Text(language.text("暂无", "No items"))
                         .font(.system(size: 10, weight: .medium))
                         .foregroundStyle(.tertiary)
                 }
@@ -1589,10 +1663,10 @@ struct TaskBoardColumnView: View {
                 .frame(height: 66)
             } else {
                 ForEach(column.items) { item in
-                    TaskIssueCard(item: item)
+                    TaskIssueCard(item: item, language: language)
                 }
                 if column.count > column.items.count {
-                    Text("+ \(column.count - column.items.count) more")
+                    Text(language.text("+ \(column.count - column.items.count) 项", "+ \(column.count - column.items.count) more"))
                         .font(.system(size: 10, weight: .medium))
                         .foregroundStyle(.secondary)
                         .padding(.top, 2)
@@ -1615,6 +1689,7 @@ struct TaskBoardColumnView: View {
 
 struct TaskIssueCard: View {
     let item: TaskItem
+    let language: WidgetLanguage
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -1625,7 +1700,7 @@ struct TaskIssueCard: View {
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 4)
                 if let updatedAt = item.updatedAt {
-                    Text(relativeTimeText(updatedAt))
+                    Text(relativeTimeText(updatedAt, language: language))
                         .font(.system(size: 8, weight: .medium))
                         .foregroundStyle(.tertiary)
                         .lineLimit(1)
@@ -1639,7 +1714,7 @@ struct TaskIssueCard: View {
                 .minimumScaleFactor(0.9)
 
             if !item.detail.isEmpty {
-                Text(item.detail)
+                Text(localizedTaskDetail(item.detail, language: language))
                     .font(.system(size: 9, weight: .medium))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -1832,6 +1907,48 @@ private func taskColumnIcon(_ kind: TaskColumnKind) -> String {
     }
 }
 
+private func localizedTaskColumnTitle(_ kind: TaskColumnKind, language: WidgetLanguage) -> String {
+    switch kind {
+    case .active:
+        return language.text("进行中", "Active")
+    case .pending:
+        return language.text("待处理", "Pending")
+    case .scheduled:
+        return language.text("定时", "Scheduled")
+    case .done:
+        return language.text("完成", "Done")
+    }
+}
+
+private func localizedDayLabel(_ label: String, language: WidgetLanguage) -> String {
+    if label == "今天" {
+        return language.text("今天", "Today")
+    }
+    return label
+}
+
+private func localizedTaskDetail(_ detail: String, language: WidgetLanguage) -> String {
+    guard !language.isChinese else { return detail }
+    return detail
+        .replacingOccurrences(of: "每天", with: "Daily")
+        .replacingOccurrences(of: "每周", with: "Weekly")
+        .replacingOccurrences(of: "每小时", with: "Hourly")
+}
+
+private func localizedReaderMessage(_ message: String, language: WidgetLanguage) -> String {
+    guard !language.isChinese else { return message }
+    if message == "正在读取 codexU 数据" { return "Reading codexU data" }
+    if message.contains("未找到 codex") { return "Codex executable not found" }
+    if message.contains("app-server 启动失败") { return "Failed to start app-server" }
+    if message.contains("app-server 响应超时") { return "app-server response timed out" }
+    if message.contains("未找到 Codex state_5.sqlite") { return "Codex state_5.sqlite not found" }
+    if message.contains("未找到 sqlite3") { return "sqlite3 not found" }
+    if message.contains("SQLite 查询失败") { return "SQLite query failed" }
+    if message.contains("任务看板未找到 SQLite 数据源") { return "Task board SQLite data source not found" }
+    if message.contains("app-server") { return message.replacingOccurrences(of: "未知错误", with: "Unknown error") }
+    return message
+}
+
 private func taskAvatarText(_ item: TaskItem) -> String {
     if item.code.hasPrefix("AUTO") { return "B" }
     let source = item.detail.split(separator: "·").first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -1841,20 +1958,20 @@ private func taskAvatarText(_ item: TaskItem) -> String {
     return "C"
 }
 
-private func timeOnly(_ date: Date) -> String {
+private func timeOnly(_ date: Date, language: WidgetLanguage = .zh) -> String {
     let formatter = DateFormatter()
-    formatter.locale = Locale(identifier: "zh_CN")
+    formatter.locale = Locale(identifier: language.isChinese ? "zh_CN" : "en_US_POSIX")
     formatter.dateFormat = "HH:mm"
     return formatter.string(from: date)
 }
 
-private func resetDateTime(_ date: Date) -> String {
+private func resetDateTime(_ date: Date, language: WidgetLanguage = .zh) -> String {
     if Calendar.current.isDateInToday(date) {
-        return timeOnly(date)
+        return timeOnly(date, language: language)
     }
 
     let formatter = DateFormatter()
-    formatter.locale = Locale(identifier: "zh_CN")
+    formatter.locale = Locale(identifier: language.isChinese ? "zh_CN" : "en_US_POSIX")
     formatter.dateFormat = "M/d HH:mm"
     return formatter.string(from: date)
 }

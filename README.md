@@ -27,12 +27,14 @@ OpenAI Codex 用量统计、Codex usage tracker、Codex quota tracker、Codex to
 - 从本机 Codex 线程和启用中的 Codex automations 生成今日任务看板。
 - 按进行中、待处理、定时、完成四类组织任务。
 - 默认贴在桌面层，不遮挡普通窗口；需要查看时可以一键唤到前台。
+- 支持中文和英文界面，默认根据系统时区选择语言，也可以通过顶部 `中 | EN` 手动切换。
 - 数据只在本机读取。codexU 不上传本地 usage、线程或账户数据到第三方服务。
 
 ## 快捷键和操作
 
 - `Command + U`：在桌面层和前台层之间切换小组件。
 - 菜单栏仪表图标：点击后执行和 `Command + U` 相同的切换操作。
+- 顶部 `中 | EN`：切换中文或英文界面，手动选择会在下次启动时保留。
 - 右上角刷新按钮：立即刷新额度、token 统计、趋势图和任务看板。
 - 右上角关闭按钮：退出 codexU。
 - 拖动小组件背景：移动小组件位置。
@@ -100,8 +102,8 @@ make release
 产物会写入 `dist/`，例如：
 
 ```text
-dist/codexU-0.1.3-mac-arm64.dmg
-dist/codexU-0.1.3-mac-arm64.dmg.sha256
+dist/codexU-0.1.4-mac-arm64.dmg
+dist/codexU-0.1.4-mac-arm64.dmg.sha256
 ```
 
 Developer ID 签名和 Apple notarization 流程见 [DISTRIBUTION.md](DISTRIBUTION.md)。
