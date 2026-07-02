@@ -162,3 +162,9 @@ Developer ID 签名和 Apple notarization 流程见 [DISTRIBUTION.md](DISTRIBUTI
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+## 关注公众号
+
+如果你关注 AI 工具、Codex 使用经验和独立产品构建，欢迎扫码关注我的公众号。
+
+<img src="docs/wechat-official-account-qr.png" alt="公众号二维码" width="220" />
