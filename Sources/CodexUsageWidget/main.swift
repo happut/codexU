@@ -1,5 +1,6 @@
 import Cocoa
 import Carbon.HIToolbox
+import Combine
 import SwiftUI
 
 struct RateWindow: Equatable {
@@ -41,7 +42,12 @@ struct DailyTokenBucket: Identifiable, Equatable {
     let tokens: Int64
 }
 
-struct TokenBreakdown: Equatable {
+enum UsageSourceQuality: String, Equatable, Codable {
+    case detailed
+    case approximate
+}
+
+struct TokenBreakdown: Equatable, Codable {
     var inputTokens: Int64
     var cachedInputTokens: Int64
     var outputTokens: Int64
@@ -107,7 +113,7 @@ struct TokenBreakdown: Equatable {
     }
 }
 
-struct PricedTokenUsage: Equatable {
+struct PricedTokenUsage: Equatable, Codable {
     var tokens: TokenBreakdown
     var estimatedCostUSD: Double
 
@@ -119,13 +125,91 @@ struct PricedTokenUsage: Equatable {
     }
 }
 
-struct DetailedUsage: Equatable {
+struct UsageDayBucket: Identifiable, Equatable, Codable {
+    let id: String
+    let date: Date
+    let usage: PricedTokenUsage
+    let sourceQuality: UsageSourceQuality
+
+    var tokens: Int64 {
+        usage.tokens.visibleTotalTokens
+    }
+}
+
+struct UsageHeatmapDay: Identifiable, Equatable, Codable {
+    let id: String
+    let date: Date
+    let usage: PricedTokenUsage?
+    let isFuture: Bool
+
+    var tokens: Int64 {
+        usage?.tokens.visibleTotalTokens ?? 0
+    }
+}
+
+struct UsageTrendSummary: Equatable, Codable {
+    let sevenDay: PricedTokenUsage
+    let dailyAverageTokens: Int64
+    let peakDay: UsageDayBucket?
+    let changePercent: Double?
+    let isNewActivity: Bool
+}
+
+struct UsageTrend: Equatable, Codable {
+    let dayBuckets: [UsageDayBucket]
+    let heatmapWeeks: [[UsageHeatmapDay]]
+    let heatmapThresholds: [Int64]
+    let summary: UsageTrendSummary
+    let month: PricedTokenUsage
+    let projectedMonthCostUSD: Double?
+    let activeDayCount: Int
+    let sourceQuality: UsageSourceQuality
+}
+
+struct DetailedUsage: Equatable, Codable {
     let today: PricedTokenUsage
     let sevenDay: PricedTokenUsage
     let month: PricedTokenUsage
     let lifetime: PricedTokenUsage
     let parsedFileCount: Int
     let tokenEventCount: Int
+}
+
+struct ProjectUsage: Identifiable, Equatable, Codable {
+    let id: String
+    let name: String
+    let fullPath: String
+    let tokens: Int64
+    let estimatedCostUSD: Double?
+    let threadCount: Int
+    let lastActiveAt: Date?
+    let sourceQuality: UsageSourceQuality
+}
+
+struct ProjectBoard: Equatable {
+    let recentProjects: [ProjectUsage]
+    let allProjects: [ProjectUsage]
+}
+
+struct ToolUsage: Identifiable, Equatable, Codable {
+    let id: String
+    let name: String
+    let category: String
+    let callCount: Int
+    let estimatedTokens: Int64?
+    let estimatedCostUSD: Double?
+}
+
+struct SkillUsage: Identifiable, Equatable, Codable {
+    let id: String
+    let name: String
+    let path: String
+    let sourceLabel: String
+    let loadCount: Int
+    let threadCount: Int
+    let staticTokenEstimate: Int64?
+    let staticByteCount: Int64?
+    let lastLoadedAt: Date?
 }
 
 struct LocalUsage: Equatable {
@@ -137,6 +221,10 @@ struct LocalUsage: Equatable {
     let dailyBuckets: [DailyTokenBucket]
     let recentThreads: [LocalThread]
     let detailedUsage: DetailedUsage?
+    let usageTrend: UsageTrend?
+    let projectBoard: ProjectBoard?
+    let toolUsages: [ToolUsage]
+    let skillUsages: [SkillUsage]
 }
 
 enum TaskColumnKind: String, Equatable {
@@ -233,21 +321,36 @@ private struct ModelTokenPrice {
 }
 
 private struct SessionUsageSource {
+    let threadId: String
     let rolloutPath: String
     let model: String?
+    let cwd: String
+    let updatedAt: Date?
 }
 
-private struct SessionUsageDelta {
+private struct SessionUsageDelta: Codable {
     let date: Date
     let tokens: TokenBreakdown
 }
 
-private struct SessionUsageCacheEntry {
+private struct SkillLoadEvent: Codable {
+    let path: String
+    let date: Date?
+}
+
+private struct SessionUsageCacheEntry: Codable {
     let fileSize: Int64
     let modificationDate: Date?
     let hasTokenEvents: Bool
     let tokenEventCount: Int
     let deltas: [SessionUsageDelta]
+    let toolCalls: [String: Int]
+    let skillLoads: [SkillLoadEvent]
+}
+
+private struct SessionUsageDiskCache: Codable {
+    let version: Int
+    let entries: [String: SessionUsageCacheEntry]
 }
 
 private struct DetailedUsageAccumulator {
@@ -289,6 +392,113 @@ private struct DetailedUsageAccumulator {
             tokenEventCount: tokenEventCount
         )
     }
+}
+
+private struct ProjectUsageAccumulator {
+    let name: String
+    let fullPath: String
+    var tokens = TokenBreakdown.zero
+    var estimatedCostUSD: Double = 0
+    var threadIds = Set<String>()
+    var lastActiveAt: Date?
+    var sourceQuality: UsageSourceQuality = .detailed
+
+    mutating func add(threadId: String, tokens addedTokens: TokenBreakdown, costUSD: Double, at date: Date) {
+        tokens.add(addedTokens)
+        estimatedCostUSD += costUSD
+        threadIds.insert(threadId)
+        if lastActiveAt == nil || date > (lastActiveAt ?? .distantPast) {
+            lastActiveAt = date
+        }
+    }
+
+    func makeUsage() -> ProjectUsage {
+        ProjectUsage(
+            id: fullPath.isEmpty ? name : fullPath,
+            name: name,
+            fullPath: fullPath,
+            tokens: tokens.visibleTotalTokens,
+            estimatedCostUSD: estimatedCostUSD,
+            threadCount: max(threadIds.count, 1),
+            lastActiveAt: lastActiveAt,
+            sourceQuality: sourceQuality
+        )
+    }
+}
+
+private struct ToolUsageAccumulator {
+    let name: String
+    var callCount: Int = 0
+    var estimatedTokens: Int64 = 0
+    var estimatedCostUSD: Double = 0
+
+    mutating func addCalls(_ calls: Int, estimatedTokens tokens: Int64, estimatedCostUSD cost: Double) {
+        callCount += calls
+        estimatedTokens += tokens
+        estimatedCostUSD += cost
+    }
+
+    func makeUsage() -> ToolUsage {
+        ToolUsage(
+            id: name,
+            name: name,
+            category: toolCategory(for: name),
+            callCount: callCount,
+            estimatedTokens: estimatedTokens > 0 ? estimatedTokens : nil,
+            estimatedCostUSD: estimatedCostUSD > 0 ? estimatedCostUSD : nil
+        )
+    }
+}
+
+private struct SkillStaticInfo {
+    let tokenEstimate: Int64?
+    let byteCount: Int64?
+}
+
+private struct SkillUsageAccumulator {
+    let path: String
+    var loadCount: Int = 0
+    var threadIds = Set<String>()
+    var lastLoadedAt: Date?
+
+    mutating func addLoad(threadId: String, at date: Date?) {
+        loadCount += 1
+        threadIds.insert(threadId)
+        guard let date else { return }
+        if lastLoadedAt == nil || date > (lastLoadedAt ?? .distantPast) {
+            lastLoadedAt = date
+        }
+    }
+
+    func makeUsage(staticInfo: SkillStaticInfo) -> SkillUsage {
+        return SkillUsage(
+            id: path,
+            name: skillName(from: path),
+            path: path,
+            sourceLabel: skillSourceLabel(from: path),
+            loadCount: loadCount,
+            threadCount: max(threadIds.count, 1),
+            staticTokenEstimate: staticInfo.tokenEstimate,
+            staticByteCount: staticInfo.byteCount,
+            lastLoadedAt: lastLoadedAt
+        )
+    }
+}
+
+private struct LocalAnalytics: Equatable, Codable {
+    let detailedUsage: DetailedUsage?
+    let usageTrend: UsageTrend?
+    let recentProjects: [ProjectUsage]
+    let toolUsages: [ToolUsage]
+    let skillUsages: [SkillUsage]
+}
+
+private struct LocalAnalyticsCacheEntry: Codable {
+    let version: Int
+    let dayKey: String
+    let databaseFingerprint: String
+    let sourceFingerprint: String
+    let analytics: LocalAnalytics
 }
 
 final class UsageStore: ObservableObject {
@@ -343,7 +553,11 @@ final class UsageStore: ObservableObject {
 
 final class CodexUsageReader {
     private let fileManager = FileManager.default
+    private let localAnalyticsCacheVersion = 6
+    private let sessionUsageCacheVersion = 4
     private static var sessionUsageCache: [String: SessionUsageCacheEntry] = [:]
+    private static var persistentSessionUsageCache: [String: SessionUsageCacheEntry]?
+    private static var localAnalyticsCache: LocalAnalyticsCacheEntry?
 
     func load() -> UsageSnapshot {
         var messages: [String] = []
@@ -705,12 +919,19 @@ final class CodexUsageReader {
             )
         }
 
-        let detailedUsage = readDetailedUsage(
+        let analytics = readLocalAnalytics(
             sqlitePath: sqlitePath,
             dbPath: dbPath,
             dayStart: dayStart,
             sevenDayStart: sevenDayStart,
             messages: &messages
+        )
+        let allProjects = readAllTimeProjects(sqlitePath: sqlitePath, dbPath: dbPath)
+        let projectBoard = ProjectBoard(
+            recentProjects: analytics.recentProjects.isEmpty
+                ? readApproximateRecentProjects(sqlitePath: sqlitePath, dbPath: dbPath, sevenDayStart: sevenDayStart)
+                : analytics.recentProjects,
+            allProjects: allProjects
         )
 
         return LocalUsage(
@@ -721,19 +942,30 @@ final class CodexUsageReader {
             lastUpdatedAt: dateFromEpoch(totalsObject["lastUpdatedAt"]),
             dailyBuckets: dailyBuckets,
             recentThreads: recent,
-            detailedUsage: detailedUsage
+            detailedUsage: analytics.detailedUsage,
+            usageTrend: analytics.usageTrend ?? readApproximateUsageTrend(
+                sqlitePath: sqlitePath,
+                dbPath: dbPath,
+                dayStart: dayStart,
+                sevenDayStart: sevenDayStart
+            ),
+            projectBoard: projectBoard,
+            toolUsages: analytics.toolUsages,
+            skillUsages: analytics.skillUsages
         )
     }
 
-    private func readDetailedUsage(
+    private func readLocalAnalytics(
         sqlitePath: String,
         dbPath: String,
         dayStart: Date,
         sevenDayStart: Date,
         messages: inout [String]
-    ) -> DetailedUsage? {
+    ) -> LocalAnalytics {
+        let calendar = Calendar.current
+        let trendStart = calendar.date(byAdding: .day, value: -190, to: dayStart) ?? sevenDayStart
         let sourceQuery = """
-        SELECT rollout_path AS rolloutPath, model
+        SELECT id, rollout_path AS rolloutPath, model, cwd, updated_at AS updatedAt
         FROM threads
         WHERE rollout_path IS NOT NULL
           AND rollout_path <> ''
@@ -746,15 +978,45 @@ final class CodexUsageReader {
             guard let path = object["rolloutPath"] as? String, !path.isEmpty, seenPaths.insert(path).inserted else {
                 return nil
             }
-            return SessionUsageSource(rolloutPath: path, model: object["model"] as? String)
+            return SessionUsageSource(
+                threadId: object["id"] as? String ?? path,
+                rolloutPath: path,
+                model: object["model"] as? String,
+                cwd: object["cwd"] as? String ?? "",
+                updatedAt: dateFromEpoch(object["updatedAt"])
+            )
         }
 
         guard !sources.isEmpty else {
             messages.append("未找到 Codex session 日志")
-            return nil
+            return LocalAnalytics(detailedUsage: nil, usageTrend: nil, recentProjects: [], toolUsages: [], skillUsages: [])
         }
 
-        let calendar = Calendar.current
+        let dayKey = localDayKey(dayStart, calendar: calendar)
+        let databaseFingerprint = fileFingerprint(paths: [
+            dbPath,
+            dbPath + "-wal",
+            dbPath + "-shm"
+        ])
+        let sourceFingerprint = sessionSourcesFingerprint(sources)
+
+        if let cached = Self.localAnalyticsCache,
+           cached.version == localAnalyticsCacheVersion,
+           cached.dayKey == dayKey,
+           cached.databaseFingerprint == databaseFingerprint,
+           cached.sourceFingerprint == sourceFingerprint {
+            return cached.analytics
+        }
+
+        if let cached = readPersistentLocalAnalyticsCache(),
+           cached.version == localAnalyticsCacheVersion,
+           cached.dayKey == dayKey,
+           cached.databaseFingerprint == databaseFingerprint,
+           cached.sourceFingerprint == sourceFingerprint {
+            Self.localAnalyticsCache = cached
+            return cached.analytics
+        }
+
         var monthComponents = calendar.dateComponents([.year, .month], from: Date())
         monthComponents.day = 1
         monthComponents.hour = 0
@@ -768,6 +1030,10 @@ final class CodexUsageReader {
         plainFormatter.formatOptions = [.withInternetDateTime]
 
         var accumulator = DetailedUsageAccumulator()
+        var dailyUsage: [String: PricedTokenUsage] = [:]
+        var recentProjectUsage: [String: ProjectUsageAccumulator] = [:]
+        var toolUsage: [String: ToolUsageAccumulator] = [:]
+        var skillUsage: [String: SkillUsageAccumulator] = [:]
         for source in sources {
             guard let entry = cachedSessionUsage(
                 source: source,
@@ -781,7 +1047,10 @@ final class CodexUsageReader {
             }
 
             let price = modelTokenPrice(for: source.model)
+            var sessionUsage = PricedTokenUsage.zero
             for delta in entry.deltas {
+                let cost = estimatedCostUSD(tokens: delta.tokens, price: price)
+                sessionUsage.add(tokens: delta.tokens, costUSD: cost)
                 accumulator.add(
                     delta.tokens,
                     at: delta.date,
@@ -790,15 +1059,389 @@ final class CodexUsageReader {
                     sevenDayStart: sevenDayStart,
                     monthStart: monthStart
                 )
+
+                if delta.date >= trendStart {
+                    let key = localDayKey(delta.date, calendar: calendar)
+                    var usage = dailyUsage[key] ?? .zero
+                    usage.add(tokens: delta.tokens, costUSD: cost)
+                    dailyUsage[key] = usage
+                }
+
+                if delta.date >= sevenDayStart {
+                    let projectKey = source.cwd.isEmpty ? "未归类" : source.cwd
+                    let projectName = source.cwd.isEmpty ? "未归类" : shortWorkspaceName(source.cwd)
+                    var project = recentProjectUsage[projectKey] ?? ProjectUsageAccumulator(
+                        name: projectName,
+                        fullPath: source.cwd
+                    )
+                    project.add(threadId: source.threadId, tokens: delta.tokens, costUSD: cost, at: delta.date)
+                    recentProjectUsage[projectKey] = project
+                }
+            }
+
+            let totalToolCalls = entry.toolCalls.values.reduce(0, +)
+            if totalToolCalls > 0, sessionUsage.tokens.visibleTotalTokens > 0 {
+                for (name, count) in entry.toolCalls {
+                    let share = Double(count) / Double(totalToolCalls)
+                    let estimatedTokens = Int64((Double(sessionUsage.tokens.visibleTotalTokens) * share).rounded())
+                    let estimatedCost = sessionUsage.estimatedCostUSD * share
+                    var usage = toolUsage[name] ?? ToolUsageAccumulator(name: name)
+                    usage.addCalls(count, estimatedTokens: estimatedTokens, estimatedCostUSD: estimatedCost)
+                    toolUsage[name] = usage
+                }
+            } else {
+                for (name, count) in entry.toolCalls {
+                    var usage = toolUsage[name] ?? ToolUsageAccumulator(name: name)
+                    usage.addCalls(count, estimatedTokens: 0, estimatedCostUSD: 0)
+                    toolUsage[name] = usage
+                }
+            }
+
+            for event in entry.skillLoads {
+                var usage = skillUsage[event.path] ?? SkillUsageAccumulator(path: event.path)
+                usage.addLoad(threadId: source.threadId, at: event.date ?? source.updatedAt)
+                skillUsage[event.path] = usage
             }
         }
 
+        writePersistentSessionUsageCache()
+        let skillUsages = makeSkillUsages(from: skillUsage)
+
         guard accumulator.parsedFileCount > 0, accumulator.tokenEventCount > 0 else {
             messages.append("未找到 Codex token_count 事件")
-            return nil
+            let analytics = LocalAnalytics(
+                detailedUsage: nil,
+                usageTrend: nil,
+                recentProjects: [],
+                toolUsages: toolUsage.values
+                    .map { $0.makeUsage() }
+                    .sorted { $0.callCount == $1.callCount ? $0.name < $1.name : $0.callCount > $1.callCount },
+                skillUsages: skillUsages
+            )
+            Self.localAnalyticsCache = LocalAnalyticsCacheEntry(
+                version: localAnalyticsCacheVersion,
+                dayKey: dayKey,
+                databaseFingerprint: databaseFingerprint,
+                sourceFingerprint: sourceFingerprint,
+                analytics: analytics
+            )
+            writePersistentLocalAnalyticsCache(Self.localAnalyticsCache)
+            return analytics
         }
 
-        return accumulator.makeUsage()
+        let analytics = LocalAnalytics(
+            detailedUsage: accumulator.makeUsage(),
+            usageTrend: makeUsageTrend(
+                dailyUsage: dailyUsage,
+                dayStart: dayStart,
+                sevenDayStart: sevenDayStart,
+                trendStart: trendStart,
+                monthStart: monthStart,
+                sourceQuality: .detailed
+            ),
+            recentProjects: recentProjectUsage.values
+                .map { $0.makeUsage() }
+                .filter { $0.tokens > 0 }
+                .sorted { $0.tokens == $1.tokens ? $0.name < $1.name : $0.tokens > $1.tokens },
+            toolUsages: toolUsage.values
+                .map { $0.makeUsage() }
+                .sorted { $0.callCount == $1.callCount ? $0.name < $1.name : $0.callCount > $1.callCount },
+            skillUsages: skillUsages
+        )
+        Self.localAnalyticsCache = LocalAnalyticsCacheEntry(
+            version: localAnalyticsCacheVersion,
+            dayKey: dayKey,
+            databaseFingerprint: databaseFingerprint,
+            sourceFingerprint: sourceFingerprint,
+            analytics: analytics
+        )
+        writePersistentLocalAnalyticsCache(Self.localAnalyticsCache)
+        return analytics
+    }
+
+    private func makeUsageTrend(
+        dailyUsage: [String: PricedTokenUsage],
+        dayStart: Date,
+        sevenDayStart: Date,
+        trendStart: Date,
+        monthStart: Date,
+        sourceQuality: UsageSourceQuality
+    ) -> UsageTrend {
+        let calendar = Calendar.current
+        var buckets: [UsageDayBucket] = []
+        var cursor = calendar.startOfDay(for: trendStart)
+        let end = calendar.startOfDay(for: dayStart)
+
+        while cursor <= end {
+            let key = localDayKey(cursor, calendar: calendar)
+            buckets.append(UsageDayBucket(
+                id: key,
+                date: cursor,
+                usage: dailyUsage[key] ?? .zero,
+                sourceQuality: sourceQuality
+            ))
+            guard let next = calendar.date(byAdding: .day, value: 1, to: cursor) else { break }
+            cursor = next
+        }
+
+        var sevenDay = PricedTokenUsage.zero
+        var previousSevenDayTokens: Int64 = 0
+        var month = PricedTokenUsage.zero
+        let previousSevenDayStart = calendar.date(byAdding: .day, value: -7, to: sevenDayStart) ?? sevenDayStart
+
+        for bucket in buckets {
+            if bucket.date >= sevenDayStart {
+                sevenDay.add(tokens: bucket.usage.tokens, costUSD: bucket.usage.estimatedCostUSD)
+            } else if bucket.date >= previousSevenDayStart {
+                previousSevenDayTokens += bucket.tokens
+            }
+
+            if bucket.date >= monthStart {
+                month.add(tokens: bucket.usage.tokens, costUSD: bucket.usage.estimatedCostUSD)
+            }
+        }
+
+        let peakDay = buckets
+            .filter { $0.date >= sevenDayStart }
+            .max { $0.tokens < $1.tokens }
+        let changePercent: Double?
+        let isNewActivity: Bool
+        if previousSevenDayTokens > 0 {
+            changePercent = (Double(sevenDay.tokens.visibleTotalTokens) - Double(previousSevenDayTokens)) / Double(previousSevenDayTokens) * 100
+            isNewActivity = false
+        } else {
+            changePercent = nil
+            isNewActivity = sevenDay.tokens.visibleTotalTokens > 0
+        }
+
+        let dayOfMonth = max(calendar.component(.day, from: Date()), 1)
+        let daysInMonth = calendar.range(of: .day, in: .month, for: Date())?.count ?? dayOfMonth
+        let projectedMonthCostUSD: Double?
+        if dayOfMonth >= 2, month.estimatedCostUSD > 0 {
+            projectedMonthCostUSD = month.estimatedCostUSD / Double(dayOfMonth) * Double(daysInMonth)
+        } else {
+            projectedMonthCostUSD = nil
+        }
+
+        let heatmapData = makeHeatmapData(
+            buckets: buckets,
+            endDate: dayStart,
+            weekCount: 26,
+            calendar: calendar
+        )
+
+        return UsageTrend(
+            dayBuckets: buckets,
+            heatmapWeeks: heatmapData.weeks,
+            heatmapThresholds: heatmapData.thresholds,
+            summary: UsageTrendSummary(
+                sevenDay: sevenDay,
+                dailyAverageTokens: sevenDay.tokens.visibleTotalTokens / 7,
+                peakDay: peakDay?.tokens ?? 0 > 0 ? peakDay : nil,
+                changePercent: changePercent,
+                isNewActivity: isNewActivity
+            ),
+            month: month,
+            projectedMonthCostUSD: projectedMonthCostUSD,
+            activeDayCount: buckets.filter { $0.tokens > 0 }.count,
+            sourceQuality: sourceQuality
+        )
+    }
+
+    private func makeHeatmapData(
+        buckets: [UsageDayBucket],
+        endDate: Date,
+        weekCount: Int,
+        calendar: Calendar
+    ) -> (weeks: [[UsageHeatmapDay]], thresholds: [Int64]) {
+        let latestDate = calendar.startOfDay(for: endDate)
+        let currentWeekStart = weekStart(for: latestDate, calendar: calendar)
+        let firstWeekStart = calendar.date(byAdding: .weekOfYear, value: -(weekCount - 1), to: currentWeekStart) ?? currentWeekStart
+        let bucketByDay = Dictionary(uniqueKeysWithValues: buckets.map { ($0.id, $0) })
+
+        let weeks: [[UsageHeatmapDay]] = (0..<weekCount).map { weekIndex in
+            (0..<7).compactMap { weekdayIndex in
+                guard let date = calendar.date(byAdding: .day, value: weekIndex * 7 + weekdayIndex, to: firstWeekStart) else {
+                    return nil
+                }
+                let key = localDayKey(date, calendar: calendar)
+                let isFuture = date > latestDate
+                return UsageHeatmapDay(
+                    id: key,
+                    date: date,
+                    usage: isFuture ? nil : bucketByDay[key]?.usage,
+                    isFuture: isFuture
+                )
+            }
+        }
+
+        let values = weeks
+            .flatMap { $0 }
+            .filter { !$0.isFuture }
+            .map(\.tokens)
+            .filter { $0 > 0 }
+            .sorted()
+        return (weeks, heatmapThresholds(values))
+    }
+
+    private func heatmapThresholds(_ values: [Int64]) -> [Int64] {
+        guard values.count >= 5 else {
+            let maxValue = max(values.max() ?? 0, 1)
+            return [maxValue / 5, maxValue * 2 / 5, maxValue * 3 / 5, maxValue * 4 / 5]
+                .map { max($0, 1) }
+        }
+        return [
+            quantile(values, fraction: 0.25),
+            quantile(values, fraction: 0.50),
+            quantile(values, fraction: 0.75),
+            quantile(values, fraction: 0.90)
+        ]
+    }
+
+    private func quantile(_ values: [Int64], fraction: Double) -> Int64 {
+        guard !values.isEmpty else { return 1 }
+        let index = min(values.count - 1, max(0, Int((Double(values.count - 1) * fraction).rounded())))
+        return max(values[index], 1)
+    }
+
+    private func weekStart(for date: Date, calendar: Calendar) -> Date {
+        let weekday = calendar.component(.weekday, from: date)
+        let mondayOffset = (weekday + 5) % 7
+        return calendar.date(byAdding: .day, value: -mondayOffset, to: calendar.startOfDay(for: date)) ?? date
+    }
+
+    private func readApproximateUsageTrend(
+        sqlitePath: String,
+        dbPath: String,
+        dayStart: Date,
+        sevenDayStart: Date
+    ) -> UsageTrend? {
+        let calendar = Calendar.current
+        let trendStart = calendar.date(byAdding: .day, value: -190, to: dayStart) ?? sevenDayStart
+        var monthComponents = calendar.dateComponents([.year, .month], from: Date())
+        monthComponents.day = 1
+        monthComponents.hour = 0
+        monthComponents.minute = 0
+        monthComponents.second = 0
+        let monthStart = calendar.date(from: monthComponents) ?? dayStart
+
+        let query = """
+        SELECT date(updated_at, 'unixepoch', 'localtime') AS day, COALESCE(SUM(tokens_used), 0) AS tokens
+        FROM threads
+        WHERE updated_at >= \(Int(trendStart.timeIntervalSince1970))
+        GROUP BY day
+        ORDER BY day ASC;
+        """
+
+        let rows = runSQLiteJSON(sqlitePath: sqlitePath, dbPath: dbPath, query: query)
+        guard !rows.isEmpty else { return nil }
+
+        var dailyUsage: [String: PricedTokenUsage] = [:]
+        for row in rows {
+            guard let key = row["day"] as? String else { continue }
+            let tokens = int64Value(row["tokens"]) ?? 0
+            dailyUsage[key] = PricedTokenUsage(
+                tokens: TokenBreakdown(
+                    inputTokens: 0,
+                    cachedInputTokens: 0,
+                    outputTokens: 0,
+                    reasoningOutputTokens: 0,
+                    totalTokens: tokens
+                ),
+                estimatedCostUSD: 0
+            )
+        }
+
+        return makeUsageTrend(
+            dailyUsage: dailyUsage,
+            dayStart: dayStart,
+            sevenDayStart: sevenDayStart,
+            trendStart: trendStart,
+            monthStart: monthStart,
+            sourceQuality: .approximate
+        )
+    }
+
+    private func readAllTimeProjects(sqlitePath: String, dbPath: String) -> [ProjectUsage] {
+        let query = """
+        SELECT cwd, COUNT(*) AS threadCount, COALESCE(SUM(tokens_used), 0) AS tokens, MAX(CASE WHEN recency_at > 0 THEN recency_at ELSE updated_at END) AS lastActiveAt
+        FROM threads
+        WHERE tokens_used > 0
+        GROUP BY cwd
+        ORDER BY tokens DESC
+        LIMIT 24;
+        """
+
+        return runSQLiteJSON(sqlitePath: sqlitePath, dbPath: dbPath, query: query).map { row in
+            let path = row["cwd"] as? String ?? ""
+            return ProjectUsage(
+                id: path.isEmpty ? "uncategorized" : path,
+                name: path.isEmpty ? "未归类" : shortWorkspaceName(path),
+                fullPath: path,
+                tokens: int64Value(row["tokens"]) ?? 0,
+                estimatedCostUSD: nil,
+                threadCount: intValue(row["threadCount"]) ?? 0,
+                lastActiveAt: dateFromEpoch(row["lastActiveAt"]),
+                sourceQuality: .approximate
+            )
+        }
+    }
+
+    private func readApproximateRecentProjects(
+        sqlitePath: String,
+        dbPath: String,
+        sevenDayStart: Date
+    ) -> [ProjectUsage] {
+        let query = """
+        SELECT cwd, COUNT(*) AS threadCount, COALESCE(SUM(tokens_used), 0) AS tokens, MAX(CASE WHEN recency_at > 0 THEN recency_at ELSE updated_at END) AS lastActiveAt
+        FROM threads
+        WHERE tokens_used > 0
+          AND updated_at >= \(Int(sevenDayStart.timeIntervalSince1970))
+        GROUP BY cwd
+        ORDER BY tokens DESC
+        LIMIT 24;
+        """
+
+        return runSQLiteJSON(sqlitePath: sqlitePath, dbPath: dbPath, query: query).map { row in
+            let path = row["cwd"] as? String ?? ""
+            return ProjectUsage(
+                id: path.isEmpty ? "uncategorized" : path,
+                name: path.isEmpty ? "未归类" : shortWorkspaceName(path),
+                fullPath: path,
+                tokens: int64Value(row["tokens"]) ?? 0,
+                estimatedCostUSD: nil,
+                threadCount: intValue(row["threadCount"]) ?? 0,
+                lastActiveAt: dateFromEpoch(row["lastActiveAt"]),
+                sourceQuality: .approximate
+            )
+        }
+    }
+
+    private func makeSkillUsages(from accumulators: [String: SkillUsageAccumulator]) -> [SkillUsage] {
+        accumulators.values
+            .map { accumulator in
+                accumulator.makeUsage(staticInfo: skillStaticInfo(for: accumulator.path))
+            }
+            .sorted {
+                if $0.loadCount != $1.loadCount { return $0.loadCount > $1.loadCount }
+                if ($0.staticTokenEstimate ?? -1) != ($1.staticTokenEstimate ?? -1) {
+                    return ($0.staticTokenEstimate ?? -1) > ($1.staticTokenEstimate ?? -1)
+                }
+                return $0.name < $1.name
+            }
+    }
+
+    private func skillStaticInfo(for path: String) -> SkillStaticInfo {
+        let url = URL(fileURLWithPath: path)
+        guard let data = try? Data(contentsOf: url) else {
+            return SkillStaticInfo(tokenEstimate: nil, byteCount: nil)
+        }
+
+        let text = String(data: data, encoding: .utf8) ?? String(decoding: data, as: UTF8.self)
+        return SkillStaticInfo(
+            tokenEstimate: estimateStaticTokens(text),
+            byteCount: Int64(data.count)
+        )
     }
 
     private func cachedSessionUsage(
@@ -813,17 +1456,26 @@ final class CodexUsageReader {
 
         let modificationDate = attributes[.modificationDate] as? Date
         if let cached = Self.sessionUsageCache[source.rolloutPath],
-           cached.fileSize == fileSize,
-           cached.modificationDate == modificationDate {
+           sameSessionFileIdentity(cached, fileSize: fileSize, modificationDate: modificationDate) {
             return cached
         }
 
-        let tokenCountPattern = #""type":"token_count""#
-        let tokenCountNeedle = Data(tokenCountPattern.utf8)
+        if let cached = persistentSessionUsageCache()[source.rolloutPath],
+           sameSessionFileIdentity(cached, fileSize: fileSize, modificationDate: modificationDate) {
+            Self.sessionUsageCache[source.rolloutPath] = cached
+            return cached
+        }
+
+        let eventPattern = #""type":"(token_count|function_call|custom_tool_call)""#
+        let tokenCountNeedle = Data(#""type":"token_count""#.utf8)
+        let functionCallNeedle = Data(#""type":"function_call""#.utf8)
+        let customToolCallNeedle = Data(#""type":"custom_tool_call""#.utf8)
         if let parsed = parseSessionUsageWithGrep(
             url: url,
-            tokenCountPattern: tokenCountPattern,
+            eventPattern: eventPattern,
             tokenCountNeedle: tokenCountNeedle,
+            functionCallNeedle: functionCallNeedle,
+            customToolCallNeedle: customToolCallNeedle,
             fractionalFormatter: fractionalFormatter,
             plainFormatter: plainFormatter
         ) {
@@ -832,7 +1484,9 @@ final class CodexUsageReader {
                 modificationDate: modificationDate,
                 hasTokenEvents: parsed.hasTokenEvents,
                 tokenEventCount: parsed.tokenEventCount,
-                deltas: parsed.deltas
+                deltas: parsed.deltas,
+                toolCalls: parsed.toolCalls,
+                skillLoads: parsed.skillLoads
             )
             Self.sessionUsageCache[source.rolloutPath] = entry
             return entry
@@ -846,6 +1500,8 @@ final class CodexUsageReader {
         var sawTokenEvent = false
         var tokenEventCount = 0
         var deltas: [SessionUsageDelta] = []
+        var toolCalls: [String: Int] = [:]
+        var skillLoads: [SkillLoadEvent] = []
 
         while true {
             let chunk = try? handle.read(upToCount: 64 * 1024)
@@ -857,29 +1513,37 @@ final class CodexUsageReader {
             while let newline = buffer.firstIndex(of: 10) {
                 let lineData = buffer.subdata(in: buffer.startIndex..<newline)
                 buffer.removeSubrange(buffer.startIndex...newline)
-                processUsageLine(
+                processSessionLine(
                     lineData,
                     tokenCountNeedle: tokenCountNeedle,
+                    functionCallNeedle: functionCallNeedle,
+                    customToolCallNeedle: customToolCallNeedle,
                     fractionalFormatter: fractionalFormatter,
                     plainFormatter: plainFormatter,
                     previous: &previous,
                     sawTokenEvent: &sawTokenEvent,
                     tokenEventCount: &tokenEventCount,
-                    deltas: &deltas
+                    deltas: &deltas,
+                    toolCalls: &toolCalls,
+                    skillLoads: &skillLoads
                 )
             }
         }
 
         if !buffer.isEmpty {
-            processUsageLine(
+            processSessionLine(
                 buffer,
                 tokenCountNeedle: tokenCountNeedle,
+                functionCallNeedle: functionCallNeedle,
+                customToolCallNeedle: customToolCallNeedle,
                 fractionalFormatter: fractionalFormatter,
                 plainFormatter: plainFormatter,
                 previous: &previous,
                 sawTokenEvent: &sawTokenEvent,
                 tokenEventCount: &tokenEventCount,
-                deltas: &deltas
+                deltas: &deltas,
+                toolCalls: &toolCalls,
+                skillLoads: &skillLoads
             )
         }
 
@@ -888,7 +1552,9 @@ final class CodexUsageReader {
             modificationDate: modificationDate,
             hasTokenEvents: sawTokenEvent,
             tokenEventCount: tokenEventCount,
-            deltas: deltas
+            deltas: deltas,
+            toolCalls: toolCalls,
+            skillLoads: skillLoads
         )
         Self.sessionUsageCache[source.rolloutPath] = entry
         return entry
@@ -896,17 +1562,19 @@ final class CodexUsageReader {
 
     private func parseSessionUsageWithGrep(
         url: URL,
-        tokenCountPattern: String,
+        eventPattern: String,
         tokenCountNeedle: Data,
+        functionCallNeedle: Data,
+        customToolCallNeedle: Data,
         fractionalFormatter: ISO8601DateFormatter,
         plainFormatter: ISO8601DateFormatter
-    ) -> (hasTokenEvents: Bool, tokenEventCount: Int, deltas: [SessionUsageDelta])? {
+    ) -> (hasTokenEvents: Bool, tokenEventCount: Int, deltas: [SessionUsageDelta], toolCalls: [String: Int], skillLoads: [SkillLoadEvent])? {
         let grepPath = "/usr/bin/grep"
         guard fileManager.isExecutableFile(atPath: grepPath) else { return nil }
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: grepPath)
-        process.arguments = ["-a", "-F", tokenCountPattern, url.path]
+        process.arguments = ["-a", "-E", eventPattern, url.path]
 
         let output = Pipe()
         process.standardOutput = output
@@ -930,53 +1598,85 @@ final class CodexUsageReader {
         var sawTokenEvent = false
         var tokenEventCount = 0
         var deltas: [SessionUsageDelta] = []
+        var toolCalls: [String: Int] = [:]
+        var skillLoads: [SkillLoadEvent] = []
 
         while let newline = buffer.firstIndex(of: 10) {
             let lineData = buffer.subdata(in: buffer.startIndex..<newline)
             buffer.removeSubrange(buffer.startIndex...newline)
-            processUsageLine(
+            processSessionLine(
                 lineData,
                 tokenCountNeedle: tokenCountNeedle,
+                functionCallNeedle: functionCallNeedle,
+                customToolCallNeedle: customToolCallNeedle,
                 fractionalFormatter: fractionalFormatter,
                 plainFormatter: plainFormatter,
                 previous: &previous,
                 sawTokenEvent: &sawTokenEvent,
                 tokenEventCount: &tokenEventCount,
-                deltas: &deltas
+                deltas: &deltas,
+                toolCalls: &toolCalls,
+                skillLoads: &skillLoads
             )
         }
 
         if !buffer.isEmpty {
-            processUsageLine(
+            processSessionLine(
                 buffer,
                 tokenCountNeedle: tokenCountNeedle,
+                functionCallNeedle: functionCallNeedle,
+                customToolCallNeedle: customToolCallNeedle,
                 fractionalFormatter: fractionalFormatter,
                 plainFormatter: plainFormatter,
                 previous: &previous,
                 sawTokenEvent: &sawTokenEvent,
                 tokenEventCount: &tokenEventCount,
-                deltas: &deltas
+                deltas: &deltas,
+                toolCalls: &toolCalls,
+                skillLoads: &skillLoads
             )
         }
 
-        return (sawTokenEvent, tokenEventCount, deltas)
+        return (sawTokenEvent, tokenEventCount, deltas, toolCalls, skillLoads)
     }
 
-    private func processUsageLine(
+    private func processSessionLine(
         _ lineData: Data,
         tokenCountNeedle: Data,
+        functionCallNeedle: Data,
+        customToolCallNeedle: Data,
         fractionalFormatter: ISO8601DateFormatter,
         plainFormatter: ISO8601DateFormatter,
         previous: inout TokenBreakdown,
         sawTokenEvent: inout Bool,
         tokenEventCount: inout Int,
-        deltas: inout [SessionUsageDelta]
+        deltas: inout [SessionUsageDelta],
+        toolCalls: inout [String: Int],
+        skillLoads: inout [SkillLoadEvent]
     ) {
-        guard lineData.range(of: tokenCountNeedle) != nil,
+        let isTokenEvent = lineData.range(of: tokenCountNeedle) != nil
+        let isToolEvent = lineData.range(of: functionCallNeedle) != nil || lineData.range(of: customToolCallNeedle) != nil
+        guard isTokenEvent || isToolEvent,
               let object = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
-              let timestamp = object["timestamp"] as? String,
               let payload = object["payload"] as? [String: Any],
-              payload["type"] as? String == "token_count",
+              let payloadType = payload["type"] as? String
+        else { return }
+
+        if payloadType == "function_call" || payloadType == "custom_tool_call" {
+            if let name = payload["name"] as? String, !name.isEmpty {
+                toolCalls[name, default: 0] += 1
+            }
+            let eventDate = (object["timestamp"] as? String).flatMap {
+                fractionalFormatter.date(from: $0) ?? plainFormatter.date(from: $0)
+            }
+            for path in skillLoadPaths(in: payload) {
+                skillLoads.append(SkillLoadEvent(path: path, date: eventDate))
+            }
+            return
+        }
+
+        guard payloadType == "token_count",
+              let timestamp = object["timestamp"] as? String,
               let info = payload["info"] as? [String: Any],
               let totalUsage = info["total_token_usage"] as? [String: Any],
               let date = fractionalFormatter.date(from: timestamp) ?? plainFormatter.date(from: timestamp)
@@ -1173,6 +1873,297 @@ final class CodexUsageReader {
     private func firstExistingPath(_ paths: [String]) -> String? {
         paths.first { fileManager.isExecutableFile(atPath: $0) || fileManager.fileExists(atPath: $0) }
     }
+
+    private func localAnalyticsCacheURL() -> URL? {
+        guard let caches = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first else {
+            return nil
+        }
+        return caches
+            .appendingPathComponent("codexU", isDirectory: true)
+            .appendingPathComponent("local-analytics-v2.json")
+    }
+
+    private func sessionUsageCacheURL() -> URL? {
+        guard let caches = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first else {
+            return nil
+        }
+        return caches
+            .appendingPathComponent("codexU", isDirectory: true)
+            .appendingPathComponent("session-usage-v1.json")
+    }
+
+    private func readPersistentLocalAnalyticsCache() -> LocalAnalyticsCacheEntry? {
+        guard let url = localAnalyticsCacheURL(),
+              let data = try? Data(contentsOf: url)
+        else { return nil }
+        return try? JSONDecoder().decode(LocalAnalyticsCacheEntry.self, from: data)
+    }
+
+    private func persistentSessionUsageCache() -> [String: SessionUsageCacheEntry] {
+        if let cache = Self.persistentSessionUsageCache {
+            return cache
+        }
+
+        guard let url = sessionUsageCacheURL(),
+              let data = try? Data(contentsOf: url),
+              let diskCache = try? JSONDecoder().decode(SessionUsageDiskCache.self, from: data),
+              diskCache.version == sessionUsageCacheVersion
+        else {
+            Self.persistentSessionUsageCache = [:]
+            return [:]
+        }
+
+        Self.persistentSessionUsageCache = diskCache.entries
+        return diskCache.entries
+    }
+
+    private func writePersistentLocalAnalyticsCache(_ entry: LocalAnalyticsCacheEntry?) {
+        guard let entry, let url = localAnalyticsCacheURL() else { return }
+        do {
+            try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let encoder = JSONEncoder()
+            let data = try encoder.encode(entry)
+            try data.write(to: url, options: .atomic)
+        } catch {
+            debugLog("failed to write local analytics cache: \(error.localizedDescription)")
+        }
+    }
+
+    private func writePersistentSessionUsageCache() {
+        guard let url = sessionUsageCacheURL() else { return }
+        let mergedEntries = persistentSessionUsageCache().merging(Self.sessionUsageCache) { _, new in new }
+        Self.persistentSessionUsageCache = mergedEntries
+
+        do {
+            try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let encoder = JSONEncoder()
+            let data = try encoder.encode(SessionUsageDiskCache(version: sessionUsageCacheVersion, entries: mergedEntries))
+            try data.write(to: url, options: .atomic)
+        } catch {
+            debugLog("failed to write session usage cache: \(error.localizedDescription)")
+        }
+    }
+
+    private func sameSessionFileIdentity(
+        _ cached: SessionUsageCacheEntry,
+        fileSize: Int64,
+        modificationDate: Date?
+    ) -> Bool {
+        guard cached.fileSize == fileSize else { return false }
+        let cachedMs = Int64((cached.modificationDate?.timeIntervalSince1970 ?? -1) * 1000)
+        let currentMs = Int64((modificationDate?.timeIntervalSince1970 ?? -1) * 1000)
+        return cachedMs == currentMs
+    }
+
+    private func fileFingerprint(paths: [String]) -> String {
+        var components: [String] = []
+        for path in paths {
+            components.append(path)
+            guard let attributes = try? fileManager.attributesOfItem(atPath: path) else {
+                components.append("missing")
+                continue
+            }
+            components.append(String((attributes[.size] as? NSNumber)?.int64Value ?? -1))
+            let modifiedMs = Int64(((attributes[.modificationDate] as? Date)?.timeIntervalSince1970 ?? -1) * 1000)
+            components.append(String(modifiedMs))
+        }
+        return components.joined(separator: "|")
+    }
+
+    private func sessionSourcesFingerprint(_ sources: [SessionUsageSource]) -> String {
+        var components: [String] = [String(sources.count)]
+        for source in sources {
+            components.append(source.threadId)
+            components.append(source.rolloutPath)
+            components.append(source.model ?? "")
+            components.append(source.cwd)
+            guard let attributes = try? fileManager.attributesOfItem(atPath: source.rolloutPath) else {
+                components.append("missing")
+                continue
+            }
+            components.append(String((attributes[.size] as? NSNumber)?.int64Value ?? -1))
+            let modifiedMs = Int64(((attributes[.modificationDate] as? Date)?.timeIntervalSince1970 ?? -1) * 1000)
+            components.append(String(modifiedMs))
+        }
+        return components.joined(separator: "|")
+    }
+}
+
+private func skillLoadPaths(in payload: [String: Any]) -> [String] {
+    var candidates: [String] = []
+    for key in ["arguments", "input", "cmd", "command"] {
+        if let text = serializedStringValue(payload[key]) {
+            candidates.append(text)
+        }
+    }
+
+    var paths: [String] = []
+    var seen = Set<String>()
+    for candidate in candidates {
+        for path in extractSkillPaths(from: candidate) where seen.insert(path).inserted {
+            paths.append(path)
+        }
+    }
+    return paths
+}
+
+private func serializedStringValue(_ value: Any?) -> String? {
+    guard let value else { return nil }
+    if let string = value as? String {
+        return string
+    }
+    guard JSONSerialization.isValidJSONObject(value),
+          let data = try? JSONSerialization.data(withJSONObject: value),
+          let string = String(data: data, encoding: .utf8)
+    else {
+        return nil
+    }
+    return string
+}
+
+private func extractSkillPaths(from text: String) -> [String] {
+    let pattern = "(?:(?:~|/)[^\\s\\\"'`<>,;)]*SKILL\\.md)"
+    guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+
+    let nsRange = NSRange(text.startIndex..<text.endIndex, in: text)
+    var paths: [String] = []
+    var seen = Set<String>()
+    regex.enumerateMatches(in: text, range: nsRange) { match, _, _ in
+        guard let match, let range = Range(match.range, in: text) else { return }
+        let rawPath = String(text[range])
+        guard let path = canonicalSkillPath(rawPath), seen.insert(path).inserted else { return }
+        paths.append(path)
+    }
+    return paths
+}
+
+private func canonicalSkillPath(_ rawPath: String) -> String? {
+    let trimmed = rawPath.trimmingCharacters(in: CharacterSet(charactersIn: " \n\r\t\"'`;,.)]"))
+    guard trimmed.hasSuffix("/SKILL.md") || trimmed == "SKILL.md" else { return nil }
+
+    let home = NSHomeDirectory()
+    let expanded: String
+    if trimmed == "~" {
+        expanded = home
+    } else if trimmed.hasPrefix("~/") {
+        expanded = home + String(trimmed.dropFirst())
+    } else {
+        expanded = trimmed
+    }
+
+    guard expanded.hasPrefix("/") else { return nil }
+    let standardized = (expanded as NSString).standardizingPath
+    if FileManager.default.fileExists(atPath: standardized) {
+        return standardized
+    }
+    if let equivalentPath = equivalentCachedSkillPath(for: standardized) {
+        return equivalentPath
+    }
+    if standardized.hasPrefix(home + "/") {
+        return standardized
+    }
+    return nil
+}
+
+private func equivalentCachedSkillPath(for path: String) -> String? {
+    let components = path.split(separator: "/").map(String.init)
+    guard let cacheIndex = components.firstIndex(of: "cache"),
+          components.count > cacheIndex + 5,
+          components[cacheIndex + 1].hasPrefix("openai-"),
+          let skillsIndex = components.lastIndex(of: "skills"),
+          components.count > skillsIndex + 2,
+          components.last == "SKILL.md"
+    else {
+        return nil
+    }
+
+    let family = components[cacheIndex + 1]
+    let plugin = components[cacheIndex + 2]
+    let skill = components[skillsIndex + 1]
+    let cacheRoot = URL(fileURLWithPath: NSHomeDirectory())
+        .appendingPathComponent(".codex/plugins/cache")
+        .appendingPathComponent(family)
+        .appendingPathComponent(plugin)
+
+    guard let versions = try? FileManager.default.contentsOfDirectory(
+        at: cacheRoot,
+        includingPropertiesForKeys: [.contentModificationDateKey],
+        options: [.skipsHiddenFiles]
+    ) else {
+        return nil
+    }
+
+    let candidates = versions
+        .map { versionURL in
+            versionURL
+                .appendingPathComponent("skills")
+                .appendingPathComponent(skill)
+                .appendingPathComponent("SKILL.md")
+        }
+        .filter { FileManager.default.fileExists(atPath: $0.path) }
+        .sorted { lhs, rhs in
+            let leftDate = (try? lhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            let rightDate = (try? rhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            return leftDate > rightDate
+        }
+
+    return candidates.first?.path
+}
+
+private func skillName(from path: String) -> String {
+    URL(fileURLWithPath: path).deletingLastPathComponent().lastPathComponent
+}
+
+private func skillSourceLabel(from path: String) -> String {
+    let displayPath = displayHomePath(path)
+    let components = path.split(separator: "/").map(String.init)
+
+    if let cacheIndex = components.firstIndex(of: "cache"), components.count > cacheIndex + 2 {
+        let family = components[cacheIndex + 1]
+        let plugin = components[cacheIndex + 2]
+        return "\(family)/\(plugin)"
+    }
+    if displayPath.contains("/ai-infra/skills/") {
+        return "ai-infra"
+    }
+    if displayPath.contains("/.agents/skills/") {
+        return "agents"
+    }
+    if displayPath.contains("/.codex/skills/.system/") {
+        return "system"
+    }
+    if displayPath.contains("/.codex/skills/") {
+        return "personal"
+    }
+    return displayPath
+}
+
+private func displayHomePath(_ path: String) -> String {
+    let home = NSHomeDirectory()
+    if path == home {
+        return "~"
+    }
+    if path.hasPrefix(home + "/") {
+        return "~" + String(path.dropFirst(home.count))
+    }
+    return path
+}
+
+private func estimateStaticTokens(_ text: String) -> Int64 {
+    let scalars = Array(text.unicodeScalars)
+    guard !scalars.isEmpty else { return 0 }
+
+    let whitespaceCount = scalars.filter { CharacterSet.whitespacesAndNewlines.contains($0) }.count
+    let cjkCount = scalars.filter { scalar in
+        (0x4E00...0x9FFF).contains(Int(scalar.value))
+            || (0x3400...0x4DBF).contains(Int(scalar.value))
+            || (0x3040...0x30FF).contains(Int(scalar.value))
+            || (0xAC00...0xD7AF).contains(Int(scalar.value))
+    }.count
+    let nonWhitespaceCount = max(0, scalars.count - whitespaceCount)
+    let nonCJKCount = max(0, nonWhitespaceCount - cjkCount)
+    let estimate = (Double(nonCJKCount) / 3.8) + Double(cjkCount)
+    return max(1, Int64(estimate.rounded(.up)))
 }
 
 private func modelTokenPrice(for model: String?) -> ModelTokenPrice {
@@ -1413,11 +2404,27 @@ enum WidgetThemeMode: String, CaseIterable, Equatable {
     }
 }
 
+enum DashboardTab: String, CaseIterable, Equatable, Identifiable {
+    case tasks
+    case usage
+    case projects
+    case skills
+
+    var id: String { rawValue }
+}
+
+final class WindowPresentationState: ObservableObject {
+    @Published var isPinnedToFront = false
+}
+
 struct UsageWidgetView: View {
     @ObservedObject var store: UsageStore
+    @ObservedObject var windowState: WindowPresentationState
     @Environment(\.colorScheme) private var colorScheme
     @State private var language = WidgetLanguage.storedOrAutomatic()
     @State private var themeMode = WidgetThemeMode.storedOrAutomatic()
+    @State private var selectedDashboardTab: DashboardTab = .tasks
+    let onPinnedFrontChange: (Bool) -> Void
 
     static let widgetWidth: CGFloat = 820
     static let widgetDefaultHeight: CGFloat = 720
@@ -1460,7 +2467,7 @@ struct UsageWidgetView: View {
                         environmentChecklistSection
                     }
                     usageOverviewSection
-                    taskBoardSection
+                    dashboardTabsSection
                 }
                 .padding(.bottom, 2)
             }
@@ -1497,12 +2504,7 @@ struct UsageWidgetView: View {
                 selectedLanguage.persist()
             }
             planPill
-            iconButton(systemName: store.isRefreshing ? "hourglass" : "arrow.clockwise") {
-                store.refresh()
-            }
-            iconButton(systemName: "xmark") {
-                NSApp.terminate(nil)
-            }
+            headerActionGroup
         }
     }
 
@@ -1554,15 +2556,46 @@ struct UsageWidgetView: View {
             )
     }
 
-    private func iconButton(systemName: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: systemName)
-                .font(.system(size: 12, weight: .semibold))
-                .frame(width: 24, height: 24)
-                .contentShape(Rectangle())
+    private var headerActionGroup: some View {
+        let isPinned = windowState.isPinnedToFront
+
+        return HStack(spacing: 2) {
+            HeaderActionButton(
+                systemName: isPinned ? "pin.fill" : "pin",
+                isActive: isPinned,
+                help: language.text("固定前台", "Pin to front"),
+                accessibilityLabel: language.text("固定前台", "Pin to front"),
+                accessibilityValue: isPinned ? language.text("已开启", "On") : language.text("未开启", "Off")
+            ) {
+                onPinnedFrontChange(!isPinned)
+            }
+
+            HeaderActionButton(
+                systemName: store.isRefreshing ? "hourglass" : "arrow.clockwise",
+                help: language.text("刷新", "Refresh"),
+                accessibilityLabel: language.text("刷新", "Refresh")
+            ) {
+                store.refresh()
+            }
+
+            HeaderActionButton(
+                systemName: "xmark",
+                hoverTint: WidgetPalette.statusDanger,
+                help: language.text("退出", "Quit"),
+                accessibilityLabel: language.text("退出", "Quit")
+            ) {
+                NSApp.terminate(nil)
+            }
         }
-        .iconButtonStyle()
-        .foregroundStyle(.secondary)
+        .padding(3)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(WidgetPalette.controlFill(effectiveColorScheme))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(WidgetPalette.controlStroke(effectiveColorScheme), lineWidth: 0.8)
+                )
+        )
     }
 
     private var usageOverviewSection: some View {
@@ -1617,18 +2650,54 @@ struct UsageWidgetView: View {
         .sectionBackground()
     }
 
-    private var taskBoardSection: some View {
+    private var dashboardTabsSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            SectionTitle(title: language.text("今日任务看板", "Today's task board"), detail: taskBoardSummary)
-            HStack(alignment: .top, spacing: 8) {
-                ForEach(taskBoardColumns) { column in
-                    TaskBoardColumnView(column: column, language: language)
-                        .frame(maxWidth: .infinity, alignment: .top)
+            HStack(alignment: .center, spacing: 10) {
+                DashboardTabSwitch(selectedTab: selectedDashboardTab, language: language) { tab in
+                    selectedDashboardTab = tab
                 }
+                Spacer(minLength: 10)
+                Text(dashboardSummary)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.78)
             }
+
+            dashboardTabContent
         }
         .padding(12)
         .sectionBackground()
+    }
+
+    @ViewBuilder
+    private var dashboardTabContent: some View {
+        switch selectedDashboardTab {
+        case .tasks:
+            taskBoardContent
+        case .usage:
+            UsageTrendPanel(trend: snapshot.local?.usageTrend, language: language)
+        case .projects:
+            ProjectBoardPanel(
+                projectBoard: snapshot.local?.projectBoard,
+                language: language
+            )
+        case .skills:
+            SkillUsagePanel(
+                skillUsages: snapshot.local?.skillUsages ?? [],
+                toolUsages: snapshot.local?.toolUsages ?? [],
+                language: language
+            )
+        }
+    }
+
+    private var taskBoardContent: some View {
+        HStack(alignment: .top, spacing: 8) {
+            ForEach(taskBoardColumns) { column in
+                TaskBoardColumnView(column: column, language: language)
+                    .frame(maxWidth: .infinity, alignment: .top)
+            }
+        }
     }
 
     private var footer: some View {
@@ -1653,6 +2722,25 @@ struct UsageWidgetView: View {
             "\(board.totalCount) 事项 · \(timeOnly(board.refreshedAt, language: language))",
             "\(board.totalCount) items · \(timeOnly(board.refreshedAt, language: language))"
         )
+    }
+
+    private var dashboardSummary: String {
+        switch selectedDashboardTab {
+        case .tasks:
+            return taskBoardSummary
+        case .usage:
+            guard let trend = snapshot.local?.usageTrend else { return language.text("读取中", "Loading") }
+            let quality = trend.sourceQuality == .approximate ? language.text("粗略统计", "Approx.") : language.text("精细统计", "Detailed")
+            return language.text("\(trend.activeDayCount) 活跃日 · \(quality)", "\(trend.activeDayCount) active days · \(quality)")
+        case .projects:
+            let activeCount = snapshot.local?.projectBoard?.recentProjects.count ?? 0
+            let totalCount = snapshot.local?.projectBoard?.allProjects.count ?? 0
+            return language.text("\(activeCount) 活跃项目 · \(totalCount) 全部", "\(activeCount) active projects · \(totalCount) total")
+        case .skills:
+            let skillCount = snapshot.local?.skillUsages.count ?? 0
+            let toolCount = snapshot.local?.toolUsages.count ?? 0
+            return language.text("\(skillCount) Skill · \(toolCount) 工具", "\(skillCount) skills · \(toolCount) tools")
+        }
     }
 
     private var taskBoardColumns: [TaskColumn] {
@@ -1808,6 +2896,124 @@ struct ThemeSwitch: View {
     }
 }
 
+struct HeaderActionButton: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var isHovering = false
+
+    let systemName: String
+    var isActive = false
+    var hoverTint: Color?
+    let help: String
+    let accessibilityLabel: String
+    var accessibilityValue: String?
+    let action: () -> Void
+
+    private var foregroundColor: Color {
+        if isActive {
+            return WidgetPalette.brandPrimary
+        }
+        if isHovering, let hoverTint {
+            return hoverTint
+        }
+        return Color.secondary
+    }
+
+    private var fillColor: Color {
+        if isActive {
+            return WidgetPalette.brandPrimary.opacity(colorScheme == .dark ? 0.24 : 0.14)
+        }
+        if isHovering {
+            return WidgetPalette.controlSelectedFill(colorScheme)
+        }
+        return Color.clear
+    }
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(foregroundColor)
+                .frame(width: headerActionButtonSize, height: headerActionButtonSize)
+                .background(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(fillColor)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .strokeBorder(
+                            isActive ? WidgetPalette.brandPrimary.opacity(0.42) : Color.clear,
+                            lineWidth: 0.8
+                        )
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(help)
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityValue(accessibilityValue ?? "")
+        .onHover { hovering in
+            isHovering = hovering
+        }
+    }
+}
+
+struct DashboardTabSwitch: View {
+    @Environment(\.colorScheme) private var colorScheme
+    let selectedTab: DashboardTab
+    let language: WidgetLanguage
+    let onSelect: (DashboardTab) -> Void
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(Array(DashboardTab.allCases.enumerated()), id: \.element.id) { index, tab in
+                Button {
+                    onSelect(tab)
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: dashboardTabIcon(tab))
+                            .font(.system(size: 10, weight: .semibold))
+                            .frame(width: dashboardTabIconWidth, alignment: .center)
+                        Text(localizedDashboardTabLabel(tab, language: language))
+                            .font(.system(size: 12, weight: selectedTab == tab ? .semibold : .medium))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.82)
+                    }
+                    .foregroundStyle(selectedTab == tab ? .primary : .secondary)
+                    .padding(.horizontal, dashboardTabHorizontalPadding)
+                    .padding(.vertical, 6)
+                    .frame(width: dashboardTabSegmentWidth)
+                    .background(
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .fill(selectedTab == tab ? WidgetPalette.controlSelectedFill(colorScheme) : Color.clear)
+                    )
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(localizedDashboardTabLabel(tab, language: language))
+
+                if index < DashboardTab.allCases.count - 1 {
+                    Rectangle()
+                        .fill(WidgetPalette.controlStroke(colorScheme))
+                        .frame(width: 1, height: 14)
+                        .padding(.horizontal, 2)
+                }
+            }
+        }
+        .padding(3)
+        .background(
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .fill(WidgetPalette.controlFill(colorScheme))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .strokeBorder(WidgetPalette.controlStroke(colorScheme), lineWidth: 0.8)
+                )
+        )
+        .fixedSize(horizontal: true, vertical: false)
+        .help(language.text("切换今日任务、用量趋势和项目排行", "Switch between tasks, usage, and project rankings"))
+        .accessibilityLabel(language.text("看板标签页", "Dashboard tabs"))
+    }
+}
+
 struct SectionBackgroundModifier: ViewModifier {
     @Environment(\.colorScheme) private var colorScheme
 
@@ -1858,33 +3064,6 @@ extension View {
 
     func cardBackground(cornerRadius: CGFloat = 10, elevated: Bool = false) -> some View {
         modifier(CardBackgroundModifier(cornerRadius: cornerRadius, elevated: elevated))
-    }
-
-    func iconButtonStyle() -> some View {
-        modifier(IconButtonStyleModifier())
-    }
-}
-
-struct IconButtonStyleModifier: ViewModifier {
-    @Environment(\.colorScheme) private var colorScheme
-
-    @ViewBuilder
-    func body(content: Content) -> some View {
-        if #available(macOS 26.0, *) {
-            content
-                .buttonStyle(.glass)
-        } else {
-            content
-                .buttonStyle(.plain)
-                .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(WidgetPalette.controlFill(colorScheme))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .strokeBorder(WidgetPalette.controlStroke(colorScheme), lineWidth: 0.8)
-                        )
-                )
-        }
     }
 }
 
@@ -2224,6 +3403,7 @@ struct DetailedTokenMetricCard: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.72)
             }
+            .frame(height: dashboardCardHeaderHeight, alignment: .center)
 
             Text(formatTokens(displayTokens))
                 .font(.system(size: 21, weight: .bold, design: .rounded))
@@ -2252,9 +3432,9 @@ struct DetailedTokenMetricCard: View {
                 )
             }
         }
-        .padding(10)
+        .padding(dashboardCardPadding)
         .frame(maxWidth: .infinity, minHeight: 128, alignment: .leading)
-        .cardBackground(cornerRadius: 10)
+        .cardBackground(cornerRadius: dashboardCardCornerRadius)
     }
 }
 
@@ -2379,6 +3559,7 @@ struct WoolProgressCard: View {
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(.secondary)
             }
+            .frame(height: dashboardCardHeaderHeight, alignment: .center)
 
             QuotaValueProgressBar(
                 currentValue: cost,
@@ -2408,8 +3589,8 @@ struct WoolProgressCard: View {
             }
 
         }
-        .padding(10)
-        .cardBackground(cornerRadius: 10)
+        .padding(dashboardCardPadding)
+        .cardBackground(cornerRadius: dashboardCardCornerRadius)
     }
 }
 
@@ -2496,9 +3677,9 @@ struct TokenMetricCard: View {
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(.secondary)
         }
-        .padding(10)
+        .padding(dashboardCardPadding)
         .frame(maxWidth: .infinity, minHeight: 78, alignment: .leading)
-        .cardBackground(cornerRadius: 10)
+        .cardBackground(cornerRadius: dashboardCardCornerRadius)
     }
 }
 
@@ -2538,15 +3719,1008 @@ struct MiniTrendCard: View {
             .font(.system(size: 9, weight: .medium))
             .foregroundStyle(.secondary)
         }
-        .padding(10)
+        .padding(dashboardCardPadding)
         .frame(width: 132, alignment: .leading)
         .frame(minHeight: 78, alignment: .leading)
-        .cardBackground(cornerRadius: 10)
+        .cardBackground(cornerRadius: dashboardCardCornerRadius)
     }
 
     private func miniBarHeight(_ tokens: Int64) -> CGFloat {
         let ratio = Double(tokens) / Double(maxTokens)
         return max(6, CGFloat(ratio) * 34)
+    }
+}
+
+struct UsageTrendPanel: View {
+    let trend: UsageTrend?
+    let language: WidgetLanguage
+
+    var body: some View {
+        if let trend {
+            GeometryReader { geometry in
+                HStack(alignment: .top, spacing: usageTrendCardSpacing) {
+                    UsageHeatmapCard(trend: trend, language: language)
+                        .frame(
+                            width: usageTrendHeatmapCardWidth(
+                                containerWidth: geometry.size.width,
+                                weekCount: trend.heatmapWeeks.count
+                            ),
+                            height: usageTrendCardHeight,
+                            alignment: .topLeading
+                        )
+                    UsageSevenDaySummaryCard(trend: trend, language: language)
+                        .frame(
+                            width: usageTrendSevenDayCardWidth(
+                                containerWidth: geometry.size.width,
+                                weekCount: trend.heatmapWeeks.count
+                            ),
+                            height: usageTrendCardHeight,
+                            alignment: .topLeading
+                        )
+                }
+            }
+            .frame(height: usageTrendCardHeight)
+        } else {
+            AnalyticsEmptyState(
+                systemName: "chart.bar.doc.horizontal",
+                title: language.text("暂无用量趋势", "No usage trend"),
+                detail: language.text("完成一次 Codex 会话后，这里会显示最近半年的每日 token 热力图。", "After one Codex session, this panel shows a daily token heatmap for the last six months.")
+            )
+        }
+    }
+}
+
+struct UsageHeatmapCard: View {
+    let trend: UsageTrend
+    let language: WidgetLanguage
+
+    var body: some View {
+        DashboardCard {
+            VStack(alignment: .leading, spacing: dashboardCardContentSpacing) {
+                DashboardCardHeader(
+                    title: language.text("最近半年用量", "Last 6 months"),
+                    systemName: "calendar"
+                ) {
+                    InfoChip(
+                        title: language.text("口径", "Source"),
+                        value: sourceQualityText(trend.sourceQuality, language: language)
+                    )
+                }
+
+                UsageHeatmapView(trend: trend, language: language)
+
+                Spacer(minLength: 0)
+
+                HStack(spacing: 6) {
+                    Spacer()
+                    Text(language.text("少", "Less"))
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    ForEach(0..<5, id: \.self) { level in
+                        RoundedRectangle(cornerRadius: 3, style: .continuous)
+                            .fill(heatmapColor(level: level))
+                            .frame(width: heatmapCellSize, height: heatmapCellSize)
+                    }
+                    Text(language.text("多", "More"))
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.top, 4)
+                .help(usageSourceHelp(language: language))
+            }
+        }
+    }
+}
+
+struct UsageHeatmapView: View {
+    let trend: UsageTrend
+    let language: WidgetLanguage
+
+    private let cellSize: CGFloat = heatmapCellSize
+    private let cellSpacing: CGFloat = usageHeatmapCellSpacing
+    private let weekdayLabelWidth: CGFloat = usageHeatmapWeekdayLabelWidth
+
+    private struct MonthMarker: Identifiable {
+        let id: Int
+        let columnIndex: Int
+        let title: String
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(alignment: .center, spacing: cellSpacing) {
+                Text("")
+                    .frame(width: weekdayLabelWidth)
+                ZStack(alignment: .topLeading) {
+                    ForEach(monthMarkers) { marker in
+                        Text(marker.title)
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                            .frame(width: usageHeatmapMonthLabelWidth, alignment: .leading)
+                            .offset(x: monthLabelX(for: marker.columnIndex))
+                    }
+                }
+                .frame(width: usageHeatmapGridWidth(weekCount: trend.heatmapWeeks.count), height: usageHeatmapMonthLabelHeight, alignment: .topLeading)
+                Color.clear
+                    .frame(width: weekdayLabelWidth, height: usageHeatmapMonthLabelHeight)
+            }
+
+            HStack(alignment: .top, spacing: cellSpacing) {
+                VStack(alignment: .trailing, spacing: cellSpacing) {
+                    ForEach(0..<7, id: \.self) { index in
+                        Text(weekdayLabel(index))
+                            .font(.system(size: 8.5, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .frame(width: weekdayLabelWidth, height: cellSize, alignment: .trailing)
+                    }
+                }
+
+                HStack(alignment: .top, spacing: cellSpacing) {
+                    ForEach(Array(trend.heatmapWeeks.enumerated()), id: \.offset) { _, week in
+                        VStack(spacing: cellSpacing) {
+                            ForEach(week) { cell in
+                                if cell.isFuture {
+                                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                                        .fill(Color.clear)
+                                        .frame(width: cellSize, height: cellSize)
+                                } else {
+                                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                                        .fill(heatmapColor(level: heatLevel(cell.tokens)))
+                                        .frame(width: cellSize, height: cellSize)
+                                        .help(heatTooltip(cell))
+                                        .accessibilityLabel(heatTooltip(cell))
+                                }
+                            }
+                        }
+                    }
+                }
+                Color.clear
+                    .frame(width: weekdayLabelWidth, height: 1)
+            }
+        }
+        .padding(.top, 4)
+    }
+
+    private var monthMarkers: [MonthMarker] {
+        trend.heatmapWeeks.enumerated().compactMap { index, week in
+            let label = monthLabel(for: week)
+            guard !label.isEmpty else { return nil }
+            return MonthMarker(id: index, columnIndex: index, title: label)
+        }
+    }
+
+    private func monthLabelX(for columnIndex: Int) -> CGFloat {
+        CGFloat(columnIndex) * (cellSize + cellSpacing)
+    }
+
+    private func monthLabel(for week: [UsageHeatmapDay]) -> String {
+        let calendar = Calendar.current
+        guard let firstOfMonth = week.first(where: { cell in
+            !cell.isFuture && calendar.component(.day, from: cell.date) == 1
+        }) else { return "" }
+        return monthText(firstOfMonth.date)
+    }
+
+    private func monthText(_ date: Date) -> String {
+        if language.isChinese {
+            switch Calendar.current.component(.month, from: date) {
+            case 1: return "一月"
+            case 2: return "二月"
+            case 3: return "三月"
+            case 4: return "四月"
+            case 5: return "五月"
+            case 6: return "六月"
+            case 7: return "七月"
+            case 8: return "八月"
+            case 9: return "九月"
+            case 10: return "十月"
+            case 11: return "十一月"
+            default: return "十二月"
+            }
+        }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "MMM"
+        return formatter.string(from: date)
+    }
+
+    private func weekdayLabel(_ index: Int) -> String {
+        switch index {
+        case 0: return language.text("一", "M")
+        case 1: return language.text("二", "T")
+        case 2: return language.text("三", "W")
+        case 3: return language.text("四", "T")
+        case 4: return language.text("五", "F")
+        case 5: return language.text("六", "S")
+        default: return language.text("日", "S")
+        }
+    }
+
+    private func heatLevel(_ tokens: Int64) -> Int {
+        guard tokens > 0 else { return 0 }
+        if tokens <= trend.heatmapThresholds[0] { return 1 }
+        if tokens <= trend.heatmapThresholds[1] { return 2 }
+        if tokens <= trend.heatmapThresholds[2] { return 3 }
+        return 4
+    }
+
+    private func heatTooltip(_ cell: UsageHeatmapDay) -> String {
+        let date = fullDateText(cell.date, language: language)
+        guard let usage = cell.usage, usage.tokens.visibleTotalTokens > 0 else {
+            return language.text("\(date) 无本地 token 记录", "No local token records on \(date)")
+        }
+        let cost = usage.estimatedCostUSD > 0 ? " · \(language.text("估算", "est.")) \(formatUSD(usage.estimatedCostUSD))" : ""
+        return "\(date) · \(formatTokens(usage.tokens.visibleTotalTokens)) tokens\(cost)"
+    }
+}
+
+struct UsageSevenDaySummaryCard: View {
+    let trend: UsageTrend
+    let language: WidgetLanguage
+
+    var body: some View {
+        DashboardCard {
+            VStack(alignment: .leading, spacing: dashboardCardContentSpacing) {
+                DashboardCardHeader(
+                    title: language.text("最近 7 日", "Last 7 days"),
+                    systemName: "chart.xyaxis.line"
+                ) {
+                    Text(changeText)
+                        .font(.system(size: 9, weight: .bold, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(changeTint)
+                        .lineLimit(1)
+                }
+
+                SevenDayLineChart(buckets: lastSevenDayBuckets, language: language)
+                    .frame(height: 116)
+
+                Spacer(minLength: 0)
+
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(formatTokens(trend.summary.sevenDay.tokens.visibleTotalTokens))
+                        .font(.system(size: 16, weight: .bold, design: .rounded))
+                        .monospacedDigit()
+                        .lineLimit(1)
+                    Text(language.text("总量", "total"))
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Text(language.text("日均 \(formatTokens(trend.summary.dailyAverageTokens))", "avg \(formatTokens(trend.summary.dailyAverageTokens))"))
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+        }
+    }
+
+    private var lastSevenDayBuckets: [UsageDayBucket] {
+        Array(trend.dayBuckets.suffix(7))
+    }
+
+    private var changeText: String {
+        if trend.summary.isNewActivity {
+            return language.text("新增", "New")
+        }
+        guard let change = trend.summary.changePercent else { return "--" }
+        return formatSignedPercent(change)
+    }
+
+    private var changeTint: Color {
+        if trend.summary.isNewActivity { return WidgetPalette.statusSuccess }
+        guard let change = trend.summary.changePercent else { return WidgetPalette.statusNeutral }
+        return change >= 0 ? WidgetPalette.statusSuccess : WidgetPalette.statusWarning
+    }
+}
+
+struct SevenDayLineChart: View {
+    let buckets: [UsageDayBucket]
+    let language: WidgetLanguage
+
+    private var maxTokens: Int64 {
+        max(buckets.map(\.tokens).max() ?? 0, 1)
+    }
+
+    var body: some View {
+        VStack(spacing: 5) {
+            GeometryReader { geometry in
+                let points = chartPoints(size: geometry.size)
+                ZStack {
+                    VStack(spacing: 0) {
+                        ForEach(0..<3, id: \.self) { _ in
+                            Rectangle()
+                                .fill(WidgetPalette.surfaceTrack.opacity(0.45))
+                                .frame(height: 1)
+                            Spacer()
+                        }
+                    }
+
+                    Path { path in
+                        guard let first = points.first else { return }
+                        path.move(to: first)
+                        for point in points.dropFirst() {
+                            path.addLine(to: point)
+                        }
+                    }
+                    .stroke(
+                        WidgetPalette.brandSecondary,
+                        style: StrokeStyle(lineWidth: 2.2, lineCap: .round, lineJoin: .round)
+                    )
+
+                    ForEach(Array(points.enumerated()), id: \.offset) { index, point in
+                        Circle()
+                            .fill(buckets[index].tokens > 0 ? WidgetPalette.brandSecondary : WidgetPalette.surfaceTrack)
+                            .frame(width: 6, height: 6)
+                            .position(point)
+                            .help(dayTooltip(buckets[index]))
+                    }
+                }
+            }
+
+            HStack(spacing: 0) {
+                ForEach(buckets) { bucket in
+                    Text(shortWeekdayText(bucket.date, language: language))
+                        .font(.system(size: 8, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity)
+                        .lineLimit(1)
+                }
+            }
+        }
+    }
+
+    private func chartPoints(size: CGSize) -> [CGPoint] {
+        guard !buckets.isEmpty else { return [] }
+        let horizontalPadding: CGFloat = 4
+        let verticalPadding: CGFloat = 8
+        let availableWidth = max(1, size.width - horizontalPadding * 2)
+        let availableHeight = max(1, size.height - verticalPadding * 2)
+        return buckets.enumerated().map { index, bucket in
+            let x = horizontalPadding + availableWidth * CGFloat(index) / CGFloat(max(buckets.count - 1, 1))
+            let ratio = Double(bucket.tokens) / Double(maxTokens)
+            let y = verticalPadding + availableHeight * CGFloat(1 - max(0, min(1, ratio)))
+            return CGPoint(x: x, y: y)
+        }
+    }
+
+    private func dayTooltip(_ bucket: UsageDayBucket) -> String {
+        "\(fullDateText(bucket.date, language: language)) · \(formatTokens(bucket.tokens)) tokens"
+    }
+}
+
+enum ProjectTimeframe: String, CaseIterable, Identifiable {
+    case recent
+    case all
+
+    var id: String { rawValue }
+}
+
+struct ProjectBoardPanel: View {
+    let projectBoard: ProjectBoard?
+    let language: WidgetLanguage
+    @State private var timeframe: ProjectTimeframe = .recent
+
+    private var projects: [ProjectUsage] {
+        switch timeframe {
+        case .recent:
+            return projectBoard?.recentProjects ?? []
+        case .all:
+            return projectBoard?.allProjects ?? []
+        }
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: dashboardGridSpacing) {
+            DashboardCard {
+                VStack(alignment: .leading, spacing: dashboardCardContentSpacing) {
+                    DashboardCardHeader(
+                        title: language.text("项目用量排行", "Project ranking"),
+                        systemName: "folder.fill"
+                    ) {
+                        Picker("", selection: $timeframe) {
+                            Text(language.text("近 7 天", "7 days")).tag(ProjectTimeframe.recent)
+                            Text(language.text("全部", "All")).tag(ProjectTimeframe.all)
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.segmented)
+                        .controlSize(.mini)
+                        .frame(width: 118, height: dashboardHeaderControlHeight)
+                    }
+
+                    if projects.isEmpty {
+                        AnalyticsEmptyState(
+                            systemName: "folder.badge.questionmark",
+                            title: language.text("暂无项目记录", "No project records"),
+                            detail: language.text("没有可归类的本机 Codex 项目用量。", "No local Codex project usage can be grouped yet.")
+                        )
+                        .frame(minHeight: 214)
+                    } else {
+                        ProjectUsageList(projects: Array(projects.prefix(8)), language: language)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+
+            ProjectActivityOverview(projectBoard: projectBoard, language: language)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+    }
+}
+
+struct ProjectActivityOverview: View {
+    let projectBoard: ProjectBoard?
+    let language: WidgetLanguage
+
+    private var recentProjects: [ProjectUsage] {
+        projectBoard?.recentProjects ?? []
+    }
+
+    private var allProjects: [ProjectUsage] {
+        projectBoard?.allProjects ?? []
+    }
+
+    private var recentTokenTotal: Int64 {
+        recentProjects.reduce(0) { $0 + $1.tokens }
+    }
+
+    private var newProjectCount: Int {
+        let allById = Dictionary(uniqueKeysWithValues: allProjects.map { ($0.id, $0) })
+        return recentProjects.filter { recent in
+            guard let all = allById[recent.id] else { return false }
+            return all.threadCount <= recent.threadCount
+        }.count
+    }
+
+    private var topOneShare: String {
+        shareText(recentProjects.first?.tokens ?? 0)
+    }
+
+    private var topThreeShare: String {
+        shareText(recentProjects.prefix(3).reduce(0) { $0 + $1.tokens })
+    }
+
+    private var recentActivity: [ProjectUsage] {
+        recentProjects
+            .sorted {
+                let left = $0.lastActiveAt ?? .distantPast
+                let right = $1.lastActiveAt ?? .distantPast
+                if left != right { return left > right }
+                return $0.tokens > $1.tokens
+            }
+            .prefix(5)
+            .map { $0 }
+    }
+
+    var body: some View {
+        DashboardCard {
+            VStack(alignment: .leading, spacing: dashboardCardContentSpacing) {
+                DashboardCardHeader(
+                    title: language.text("项目活动概览", "Project activity"),
+                    systemName: "chart.bar.doc.horizontal.fill"
+                ) {
+                    InfoChip(title: language.text("近 7 天", "7 days"), value: "\(recentProjects.count)")
+                        .frame(height: dashboardHeaderControlHeight)
+                        .help(language.text("基于近 7 天本机 Codex 项目活动统计。", "Based on local Codex project activity in the last 7 days."))
+                }
+
+                if recentProjects.isEmpty {
+                    AnalyticsEmptyState(
+                        systemName: "chart.bar.doc.horizontal",
+                        title: language.text("暂无项目活动", "No project activity"),
+                        detail: language.text("近 7 天没有可归类的项目活动。", "No local project activity can be grouped in the last 7 days.")
+                    )
+                    .frame(minHeight: 214)
+                } else {
+                    VStack(alignment: .leading, spacing: dashboardListRowSpacing) {
+                        HStack(spacing: dashboardListRowSpacing) {
+                            MetricTile(
+                                title: language.text("活跃项目", "Active"),
+                                value: "\(recentProjects.count)",
+                                tint: WidgetPalette.brandSecondary
+                            )
+                            MetricTile(
+                                title: language.text("新增估算", "New est."),
+                                value: "\(newProjectCount)",
+                                tint: WidgetPalette.statusSuccess
+                            )
+                        }
+                        HStack(spacing: dashboardListRowSpacing) {
+                            MetricTile(
+                                title: "Top1",
+                                value: topOneShare,
+                                tint: WidgetPalette.statusInfo
+                            )
+                            MetricTile(
+                                title: "Top3",
+                                value: topThreeShare,
+                                tint: WidgetPalette.statusWarning
+                            )
+                        }
+
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(language.text("最近活跃", "Recent activity"))
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+
+                            VStack(spacing: dashboardListRowSpacing) {
+                                ForEach(recentActivity) { project in
+                                    ProjectActivityRow(project: project, language: language)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func shareText(_ tokens: Int64) -> String {
+        guard recentTokenTotal > 0, tokens > 0 else { return "--" }
+        return formatUsagePercent(Double(tokens) / Double(recentTokenTotal) * 100)
+    }
+}
+
+struct ProjectActivityRow: View {
+    let project: ProjectUsage
+    let language: WidgetLanguage
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 7) {
+            Image(systemName: "folder.fill")
+                .font(.system(size: 8.5, weight: .semibold))
+                .foregroundStyle(WidgetPalette.brandSecondary)
+                .frame(width: 18, height: 18)
+                .background(
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(WidgetPalette.brandSecondary.opacity(0.12))
+                )
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(project.name)
+                    .font(.system(size: 10, weight: .semibold))
+                    .lineLimit(1)
+                Text(projectDetail)
+                    .font(.system(size: 8.5, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 6)
+
+            Text(formatTokens(project.tokens))
+                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+        }
+        .padding(dashboardRowPadding)
+        .background(
+            RoundedRectangle(cornerRadius: dashboardRowCornerRadius, style: .continuous)
+                .fill(WidgetPalette.surfaceTrack.opacity(0.42))
+        )
+        .help(project.fullPath.isEmpty ? project.name : project.fullPath)
+    }
+
+    private var projectDetail: String {
+        let threads = language.text("\(project.threadCount) 线程", "\(project.threadCount) threads")
+        if let lastActiveAt = project.lastActiveAt {
+            return "\(threads) · \(relativeTimeText(lastActiveAt, language: language))"
+        }
+        return threads
+    }
+}
+
+struct ProjectUsageList: View {
+    let projects: [ProjectUsage]
+    let language: WidgetLanguage
+
+    private var maxTokens: Int64 {
+        max(projects.map(\.tokens).max() ?? 0, 1)
+    }
+
+    var body: some View {
+        VStack(spacing: dashboardListRowSpacing) {
+            ForEach(projects) { project in
+                ProjectUsageRow(project: project, maxTokens: maxTokens, language: language)
+            }
+        }
+    }
+}
+
+struct ProjectUsageRow: View {
+    let project: ProjectUsage
+    let maxTokens: Int64
+    let language: WidgetLanguage
+
+    private var progress: Double {
+        guard maxTokens > 0 else { return 0 }
+        return max(0, min(1, Double(project.tokens) / Double(maxTokens)))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(project.name)
+                        .font(.system(size: 10.5, weight: .semibold))
+                        .lineLimit(1)
+                    Text(projectDetail)
+                        .font(.system(size: 8.5, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 6)
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text(formatTokens(project.tokens))
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .monospacedDigit()
+                    Text(projectSecondaryValue)
+                        .font(.system(size: 8.5, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+
+            GeometryReader { geometry in
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .fill(WidgetPalette.surfaceTrack)
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .fill(WidgetPalette.brandSecondary.opacity(0.82))
+                        .frame(width: max(4, geometry.size.width * CGFloat(progress)))
+                }
+            }
+            .frame(height: 6)
+        }
+        .padding(dashboardRowPadding)
+        .background(
+            RoundedRectangle(cornerRadius: dashboardRowCornerRadius, style: .continuous)
+                .fill(WidgetPalette.surfaceTrack.opacity(0.42))
+        )
+        .help(project.fullPath.isEmpty ? project.name : project.fullPath)
+    }
+
+    private var projectDetail: String {
+        let threads = language.text("\(project.threadCount) 线程", "\(project.threadCount) threads")
+        if let lastActiveAt = project.lastActiveAt {
+            return "\(threads) · \(relativeTimeText(lastActiveAt, language: language))"
+        }
+        return threads
+    }
+
+    private var projectSecondaryValue: String {
+        if let estimatedCostUSD = project.estimatedCostUSD {
+            return language.text("估算 \(formatUSD(estimatedCostUSD))", "est. \(formatUSD(estimatedCostUSD))")
+        }
+        return sourceQualityDetailText(project.sourceQuality, language: language)
+    }
+}
+
+struct ToolUsageList: View {
+    let toolUsages: [ToolUsage]
+    let language: WidgetLanguage
+
+    private var maxCalls: Int {
+        max(toolUsages.map(\.callCount).max() ?? 0, 1)
+    }
+
+    var body: some View {
+        DashboardCard {
+            VStack(alignment: .leading, spacing: dashboardCardContentSpacing) {
+                DashboardCardHeader(
+                    title: language.text("工具使用 TOP20", "Tool usage TOP20"),
+                    systemName: "wrench.and.screwdriver.fill"
+                ) {
+                    InfoChip(title: "Token", value: language.text("估算", "Est."))
+                        .frame(height: dashboardHeaderControlHeight)
+                        .help(language.text("调用次数为事件计数；工具 token 按 session 内调用占比估算。", "Call counts are event counts. Tool tokens are estimated from each session's call share."))
+                }
+
+                if toolUsages.isEmpty {
+                    AnalyticsEmptyState(
+                        systemName: "wrench.and.screwdriver",
+                        title: language.text("暂无工具调用", "No tool calls"),
+                        detail: language.text("没有可统计的本机工具调用事件。", "No local tool call events can be counted yet.")
+                    )
+                    .frame(minHeight: 214)
+                } else {
+                    VStack(spacing: dashboardListRowSpacing) {
+                        ForEach(toolUsages) { tool in
+                            ToolUsageRow(tool: tool, maxCalls: maxCalls, language: language)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct ToolUsageRow: View {
+    let tool: ToolUsage
+    let maxCalls: Int
+    let language: WidgetLanguage
+
+    private var progress: Double {
+        guard maxCalls > 0 else { return 0 }
+        return max(0, min(1, Double(tool.callCount) / Double(maxCalls)))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 7) {
+                Image(systemName: toolCategoryIcon(tool.category))
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(WidgetPalette.brandPrimary)
+                    .frame(width: 18, height: 18)
+                    .background(
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .fill(WidgetPalette.brandPrimary.opacity(0.12))
+                    )
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(tool.name)
+                        .font(.system(size: 10, weight: .semibold, design: .rounded))
+                        .lineLimit(1)
+                    Text(localizedToolCategory(tool.category, language: language))
+                        .font(.system(size: 8.5, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 6)
+                VStack(alignment: .trailing, spacing: 1) {
+                    Text(language.text("\(tool.callCount) 次", "\(tool.callCount)x"))
+                        .font(.system(size: 10.5, weight: .bold, design: .rounded))
+                        .monospacedDigit()
+                    Text(tool.estimatedTokens.map { language.text("估算 \(formatTokens($0))", "est. \(formatTokens($0))") } ?? "--")
+                        .font(.system(size: 8.5, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+
+            GeometryReader { geometry in
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .fill(WidgetPalette.surfaceTrack)
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .fill(WidgetPalette.brandPrimary.opacity(0.78))
+                        .frame(width: max(4, geometry.size.width * CGFloat(progress)))
+                }
+            }
+            .frame(height: 6)
+        }
+        .padding(dashboardRowPadding)
+        .background(
+            RoundedRectangle(cornerRadius: dashboardRowCornerRadius, style: .continuous)
+                .fill(WidgetPalette.surfaceTrack.opacity(0.42))
+        )
+        .help(toolHelpText)
+    }
+
+    private var toolHelpText: String {
+        let tokenText = tool.estimatedTokens.map { formatTokens($0) } ?? "--"
+        let costText = tool.estimatedCostUSD.map { formatUSD($0) } ?? "--"
+        return language.text(
+            "\(tool.name) · \(tool.callCount) 次 · 估算 \(tokenText) · \(costText)",
+            "\(tool.name) · \(tool.callCount)x · est. \(tokenText) · \(costText)"
+        )
+    }
+}
+
+struct SkillUsagePanel: View {
+    let skillUsages: [SkillUsage]
+    let toolUsages: [ToolUsage]
+    let language: WidgetLanguage
+
+    private var topSkills: [SkillUsage] {
+        Array(skillUsages.prefix(20))
+    }
+
+    private var maxLoads: Int {
+        max(topSkills.map(\.loadCount).max() ?? 0, 1)
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: dashboardGridSpacing) {
+            skillUsageList
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+
+            ToolUsageList(toolUsages: Array(toolUsages.prefix(20)), language: language)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+    }
+
+    private var skillUsageList: some View {
+        DashboardCard {
+            VStack(alignment: .leading, spacing: dashboardCardContentSpacing) {
+                DashboardCardHeader(
+                    title: language.text("Skill 使用 TOP20", "Skill usage TOP20"),
+                    systemName: "puzzlepiece.extension.fill"
+                ) {
+                    InfoChip(title: "Token", value: language.text("Skill.md Token数", "Skill.md tokens"))
+                        .frame(height: dashboardHeaderControlHeight)
+                        .help(language.text(
+                            "调用次数按本地 session 中 SKILL.md 加载事件计数；Token 数来自本机 Skill.md 文件内容估算，不代表完整任务消耗。",
+                            "Load counts come from local session SKILL.md load events. Token counts are estimated from the local Skill.md file content, not from the full task."
+                        ))
+                }
+
+                if topSkills.isEmpty {
+                    AnalyticsEmptyState(
+                        systemName: "puzzlepiece.extension",
+                        title: language.text("暂无 Skill 加载", "No Skill loads"),
+                        detail: language.text("没有在本机 session 工具调用参数中发现 SKILL.md 加载事件。", "No SKILL.md load events were found in local session tool-call arguments.")
+                    )
+                    .frame(minHeight: 214)
+                } else {
+                    VStack(spacing: dashboardListRowSpacing) {
+                        ForEach(topSkills) { skill in
+                            SkillUsageRow(skill: skill, maxLoads: maxLoads, language: language)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct SkillUsageRow: View {
+    let skill: SkillUsage
+    let maxLoads: Int
+    let language: WidgetLanguage
+
+    private var progress: Double {
+        guard maxLoads > 0 else { return 0 }
+        return max(0, min(1, Double(skill.loadCount) / Double(maxLoads)))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 7) {
+                Image(systemName: "puzzlepiece.extension.fill")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(WidgetPalette.brandSecondary)
+                    .frame(width: 18, height: 18)
+                    .background(
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .fill(WidgetPalette.brandSecondary.opacity(0.12))
+                    )
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(skill.name)
+                        .font(.system(size: 10.5, weight: .semibold, design: .rounded))
+                        .lineLimit(1)
+                    Text(skillDetail)
+                        .font(.system(size: 8.5, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 6)
+                VStack(alignment: .trailing, spacing: 1) {
+                    Text(language.text("\(skill.loadCount) 次", "\(skill.loadCount)x"))
+                        .font(.system(size: 10.5, weight: .bold, design: .rounded))
+                        .monospacedDigit()
+                    Text(staticTokenText)
+                        .font(.system(size: 8.5, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+
+            GeometryReader { geometry in
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .fill(WidgetPalette.surfaceTrack)
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .fill(WidgetPalette.brandSecondary.opacity(0.78))
+                        .frame(width: max(4, geometry.size.width * CGFloat(progress)))
+                }
+            }
+            .frame(height: 6)
+        }
+        .padding(dashboardRowPadding)
+        .background(
+            RoundedRectangle(cornerRadius: dashboardRowCornerRadius, style: .continuous)
+                .fill(WidgetPalette.surfaceTrack.opacity(0.42))
+        )
+        .help(skillHelpText)
+    }
+
+    private var skillDetail: String {
+        let threads = language.text("\(skill.threadCount) 线程", "\(skill.threadCount) threads")
+        if let lastLoadedAt = skill.lastLoadedAt {
+            return "\(skill.sourceLabel) · \(threads) · \(relativeTimeText(lastLoadedAt, language: language))"
+        }
+        return "\(skill.sourceLabel) · \(threads)"
+    }
+
+    private var staticTokenText: String {
+        guard let tokens = skill.staticTokenEstimate else {
+            return language.text("文件缺失", "missing file")
+        }
+        return language.text("Skill.md \(formatTokens(tokens))", "Skill.md \(formatTokens(tokens))")
+    }
+
+    private var skillHelpText: String {
+        let staticTokens = skill.staticTokenEstimate.map { formatTokens($0) } ?? "--"
+        let size = formatBytes(skill.staticByteCount)
+        return language.text(
+            "\(skill.name) · \(skill.loadCount) 次加载 · \(skill.threadCount) 线程 · Skill.md Token数 \(staticTokens) · 文件 \(size) · \(displayHomePath(skill.path))",
+            "\(skill.name) · \(skill.loadCount)x loads · \(skill.threadCount) threads · Skill.md tokens \(staticTokens) · file \(size) · \(displayHomePath(skill.path))"
+        )
+    }
+}
+
+struct AnalyticsEmptyState: View {
+    let systemName: String
+    let title: String
+    let detail: String
+
+    var body: some View {
+        VStack(spacing: 7) {
+            Image(systemName: systemName)
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(.tertiary)
+            Text(title)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Text(detail)
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(.tertiary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(16)
+    }
+}
+
+struct DashboardCard<Content: View>: View {
+    let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        content
+            .padding(dashboardCardPadding)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .cardBackground(cornerRadius: dashboardCardCornerRadius)
+    }
+}
+
+struct DashboardCardHeader<Trailing: View>: View {
+    let title: String
+    let systemName: String
+    let trailing: Trailing
+
+    init(
+        title: String,
+        systemName: String,
+        @ViewBuilder trailing: () -> Trailing
+    ) {
+        self.title = title
+        self.systemName = systemName
+        self.trailing = trailing()
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: dashboardCardHeaderSpacing) {
+            Image(systemName: systemName)
+                .font(.system(size: dashboardCardIconSize, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: dashboardCardIconFrame, height: dashboardCardHeaderHeight)
+            Text(title)
+                .font(.system(size: dashboardCardTitleSize, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Spacer(minLength: dashboardCardHeaderSpacing)
+            trailing
+        }
+        .frame(height: dashboardCardHeaderHeight, alignment: .center)
     }
 }
 
@@ -2572,6 +4746,7 @@ struct TaskBoardColumnView: View {
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(.tertiary)
             }
+            .frame(height: dashboardCardHeaderHeight, alignment: .center)
 
             if column.items.isEmpty {
                 VStack(spacing: 5) {
@@ -2597,13 +4772,13 @@ struct TaskBoardColumnView: View {
                 }
             }
         }
-        .padding(8)
+        .padding(dashboardCardPadding)
         .frame(minHeight: 274, alignment: .topLeading)
         .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
+            RoundedRectangle(cornerRadius: dashboardCardCornerRadius, style: .continuous)
                 .fill(taskColumnFill(column.id))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    RoundedRectangle(cornerRadius: dashboardCardCornerRadius, style: .continuous)
                         .strokeBorder(taskAccentColor(column.id).opacity(0.12), lineWidth: 0.8)
                 )
         )
@@ -2650,9 +4825,9 @@ struct TaskIssueCard: View {
                 TaskAvatar(text: taskAvatarText(item), kind: item.kind)
             }
         }
-        .padding(8)
+        .padding(dashboardRowPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .cardBackground(cornerRadius: 8, elevated: true)
+        .cardBackground(cornerRadius: dashboardRowCornerRadius, elevated: true)
     }
 }
 
@@ -2850,6 +5025,10 @@ private enum WidgetPalette {
         colorScheme == .dark ? Color.white.opacity(0.085) : Color.white.opacity(0.520)
     }
 
+    static func controlSelectedFill(_ colorScheme: ColorScheme) -> Color {
+        colorScheme == .dark ? Color.white.opacity(0.180) : Color.black.opacity(0.105)
+    }
+
     static func controlStroke(_ colorScheme: ColorScheme) -> Color {
         colorScheme == .dark ? Color.white.opacity(0.070) : Color.black.opacity(0.050)
     }
@@ -2866,6 +5045,177 @@ private let quotaSecondaryTrackColor = WidgetPalette.surfaceTrack
 private let uncachedInputColor = WidgetPalette.statusInfo
 private let cachedInputColor = WidgetPalette.brandSecondary
 private let outputTokenColor = WidgetPalette.statusWarning
+private let dashboardGridSpacing: CGFloat = 10
+private let dashboardCardPadding: CGFloat = 10
+private let dashboardCardCornerRadius: CGFloat = 10
+private let dashboardCardHeaderHeight: CGFloat = 28
+private let dashboardCardHeaderSpacing: CGFloat = 8
+private let dashboardCardContentSpacing: CGFloat = 8
+private let dashboardHeaderControlHeight: CGFloat = 24
+private let headerActionButtonSize: CGFloat = 28
+private let dashboardTabSegmentWidth: CGFloat = 96
+private let dashboardTabIconWidth: CGFloat = 14
+private let dashboardTabHorizontalPadding: CGFloat = 10
+private let dashboardCardIconSize: CGFloat = 12
+private let dashboardCardIconFrame: CGFloat = 18
+private let dashboardCardTitleSize: CGFloat = 11
+private let dashboardListRowSpacing: CGFloat = 6
+private let dashboardRowPadding: CGFloat = 7
+private let dashboardRowCornerRadius: CGFloat = 8
+private let usageTrendCardHeight: CGFloat = 214
+private let usageTrendCardSpacing: CGFloat = dashboardGridSpacing
+private let usageSevenDayMinimumCardWidth: CGFloat = 260
+private let usageHeatmapCellSpacing: CGFloat = 4
+private let usageHeatmapWeekdayLabelWidth: CGFloat = 20
+private let usageHeatmapMonthLabelWidth: CGFloat = 42
+private let usageHeatmapMonthLabelHeight: CGFloat = 16
+private let heatmapCellSize: CGFloat = 10
+
+private func usageHeatmapGridWidth(weekCount: Int) -> CGFloat {
+    guard weekCount > 0 else { return 0 }
+    return CGFloat(weekCount) * heatmapCellSize + CGFloat(max(weekCount - 1, 0)) * usageHeatmapCellSpacing
+}
+
+private func usageHeatmapContentWidth(weekCount: Int) -> CGFloat {
+    usageHeatmapWeekdayLabelWidth
+        + usageHeatmapCellSpacing
+        + usageHeatmapGridWidth(weekCount: weekCount)
+        + usageHeatmapCellSpacing
+        + usageHeatmapWeekdayLabelWidth
+}
+
+private func usageHeatmapPreferredCardWidth(weekCount: Int) -> CGFloat {
+    usageHeatmapContentWidth(weekCount: weekCount) + dashboardCardPadding * 2
+}
+
+private func usageTrendHeatmapCardWidth(containerWidth: CGFloat, weekCount: Int) -> CGFloat {
+    let availableWidth = max(0, containerWidth - usageTrendCardSpacing)
+    let preferredWidth = usageHeatmapPreferredCardWidth(weekCount: weekCount)
+    guard availableWidth > preferredWidth + usageSevenDayMinimumCardWidth else {
+        return min(preferredWidth, max(0, availableWidth * 0.58))
+    }
+    return preferredWidth
+}
+
+private func usageTrendSevenDayCardWidth(containerWidth: CGFloat, weekCount: Int) -> CGFloat {
+    max(
+        0,
+        containerWidth - usageTrendCardSpacing - usageTrendHeatmapCardWidth(
+            containerWidth: containerWidth,
+            weekCount: weekCount
+        )
+    )
+}
+
+private func localizedDashboardTitle(_ tab: DashboardTab, language: WidgetLanguage) -> String {
+    switch tab {
+    case .tasks:
+        return language.text("今日任务看板", "Today's task board")
+    case .usage:
+        return language.text("用量趋势", "Usage trend")
+    case .projects:
+        return language.text("项目排行", "Project ranking")
+    case .skills:
+        return language.text("Skill 使用", "Skill usage")
+    }
+}
+
+private func localizedDashboardTabLabel(_ tab: DashboardTab, language: WidgetLanguage) -> String {
+    switch tab {
+    case .tasks:
+        return language.text("今日任务", "Today")
+    case .usage:
+        return language.text("用量趋势", "Usage")
+    case .projects:
+        return language.text("项目排行", "Projects")
+    case .skills:
+        return "Skill"
+    }
+}
+
+private func dashboardTabIcon(_ tab: DashboardTab) -> String {
+    switch tab {
+    case .tasks:
+        return "checklist"
+    case .usage:
+        return "calendar"
+    case .projects:
+        return "folder"
+    case .skills:
+        return "puzzlepiece.extension"
+    }
+}
+
+private func heatmapColor(level: Int) -> Color {
+    switch level {
+    case 0:
+        return WidgetPalette.surfaceTrack
+    case 1:
+        return WidgetPalette.brandSecondary.opacity(0.28)
+    case 2:
+        return WidgetPalette.brandSecondary.opacity(0.46)
+    case 3:
+        return WidgetPalette.brandSecondary.opacity(0.70)
+    default:
+        return WidgetPalette.brandSecondary.opacity(0.96)
+    }
+}
+
+private func sourceQualityText(_ quality: UsageSourceQuality, language: WidgetLanguage) -> String {
+    switch quality {
+    case .detailed:
+        return language.text("精细", "Detailed")
+    case .approximate:
+        return language.text("粗略", "Approx.")
+    }
+}
+
+private func sourceQualityDetailText(_ quality: UsageSourceQuality, language: WidgetLanguage) -> String {
+    switch quality {
+    case .detailed:
+        return language.text("事件口径", "Event source")
+    case .approximate:
+        return language.text("线程口径", "Thread source")
+    }
+}
+
+private func usageSourceTooltip(_ quality: UsageSourceQuality, language: WidgetLanguage) -> String {
+    switch quality {
+    case .detailed:
+        return language.text("来自 token_count", "From token_count")
+    case .approximate:
+        return language.text("按线程更新时间", "By thread time")
+    }
+}
+
+private func usageSourceHelp(language: WidgetLanguage) -> String {
+    language.text(
+        "使用本机 Codex session token_count 事件估算；缺失时回退到本机线程更新时间统计。API 等效价值为估算，不代表官方账单。",
+        "Estimated from local Codex session token_count events. Falls back to thread updated_at when detailed events are unavailable. API-equivalent value is an estimate, not an official bill."
+    )
+}
+
+private func fullDateText(_ date: Date, language: WidgetLanguage) -> String {
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: language.isChinese ? "zh_CN" : "en_US_POSIX")
+    formatter.dateFormat = language.isChinese ? "M月d日 EEEE" : "MMM d, EEEE"
+    return formatter.string(from: date)
+}
+
+private func shortWeekdayText(_ date: Date, language: WidgetLanguage) -> String {
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: language.isChinese ? "zh_CN" : "en_US_POSIX")
+    formatter.dateFormat = language.isChinese ? "E" : "EEE"
+    return formatter.string(from: date)
+}
+
+private func localDayKey(_ date: Date, calendar: Calendar = .current) -> String {
+    let formatter = DateFormatter()
+    formatter.calendar = calendar
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.dateFormat = "yyyy-MM-dd"
+    return formatter.string(from: date)
+}
 
 private func formatTokens(_ value: Int64?) -> String {
     guard let value else { return "--" }
@@ -2877,6 +5227,18 @@ private func formatTokens(_ value: Int64?) -> String {
         return String(format: "%.1fK", Double(value) / 1_000)
     }
     return "\(value)"
+}
+
+private func formatBytes(_ value: Int64?) -> String {
+    guard let value else { return "--" }
+    let absValue = abs(Double(value))
+    if absValue >= 1_000_000 {
+        return String(format: "%.1fMB", Double(value) / 1_000_000)
+    }
+    if absValue >= 1_000 {
+        return String(format: "%.1fKB", Double(value) / 1_000)
+    }
+    return "\(value)B"
 }
 
 private func formatUSD(_ value: Double?) -> String {
@@ -2912,6 +5274,77 @@ private func formatUsagePercent(_ value: Double) -> String {
         return "<1%"
     }
     return "\(Int(value.rounded()))%"
+}
+
+private func formatSignedPercent(_ value: Double) -> String {
+    if value > 0, value < 1 {
+        return "+<1%"
+    }
+    if value < 0, value > -1 {
+        return "-<1%"
+    }
+    return String(format: "%+.0f%%", value)
+}
+
+private func toolCategory(for name: String) -> String {
+    let normalized = name.lowercased()
+    if normalized.contains("exec") || normalized.contains("shell") || normalized.contains("stdin") {
+        return "terminal"
+    }
+    if normalized.contains("patch") || normalized.contains("edit") {
+        return "edit"
+    }
+    if normalized.contains("web") || normalized.contains("browser") || normalized.contains("page") || normalized.contains("click") || normalized.contains("screenshot") || normalized.contains("snapshot") {
+        return "browser"
+    }
+    if normalized.contains("image") || normalized.contains("figma") {
+        return "visual"
+    }
+    if normalized.contains("docs") || normalized.contains("library") || normalized.contains("mcp") || normalized.contains("resource") {
+        return "docs"
+    }
+    if normalized.contains("plan") || normalized.contains("goal") {
+        return "planning"
+    }
+    return "tool"
+}
+
+private func toolCategoryIcon(_ category: String) -> String {
+    switch category {
+    case "terminal":
+        return "terminal"
+    case "edit":
+        return "pencil.and.outline"
+    case "browser":
+        return "globe"
+    case "visual":
+        return "photo"
+    case "docs":
+        return "doc.text.magnifyingglass"
+    case "planning":
+        return "checklist"
+    default:
+        return "wrench"
+    }
+}
+
+private func localizedToolCategory(_ category: String, language: WidgetLanguage) -> String {
+    switch category {
+    case "terminal":
+        return language.text("终端", "Terminal")
+    case "edit":
+        return language.text("代码编辑", "Edit")
+    case "browser":
+        return language.text("浏览/检索", "Browser/Web")
+    case "visual":
+        return language.text("视觉", "Visual")
+    case "docs":
+        return language.text("文档/MCP", "Docs/MCP")
+    case "planning":
+        return language.text("计划", "Planning")
+    default:
+        return language.text("工具", "Tool")
+    }
 }
 
 private func taskAccentColor(_ kind: TaskColumnKind) -> Color {
@@ -3039,6 +5472,41 @@ private func jsonObject(_ usage: PricedTokenUsage) -> [String: Any] {
     ]
 }
 
+private func jsonObject(_ project: ProjectUsage) -> [String: Any] {
+    [
+        "name": project.name,
+        "fullPath": project.fullPath,
+        "tokens": project.tokens,
+        "estimatedCostUSD": jsonValue(project.estimatedCostUSD),
+        "threadCount": project.threadCount,
+        "lastActiveAt": jsonValue(isoString(project.lastActiveAt)),
+        "sourceQuality": project.sourceQuality.rawValue
+    ] as [String: Any]
+}
+
+private func jsonObject(_ tool: ToolUsage) -> [String: Any] {
+    [
+        "name": tool.name,
+        "category": tool.category,
+        "callCount": tool.callCount,
+        "estimatedTokens": jsonValue(tool.estimatedTokens),
+        "estimatedCostUSD": jsonValue(tool.estimatedCostUSD)
+    ] as [String: Any]
+}
+
+private func jsonObject(_ skill: SkillUsage) -> [String: Any] {
+    [
+        "name": skill.name,
+        "path": skill.path,
+        "sourceLabel": skill.sourceLabel,
+        "loadCount": skill.loadCount,
+        "threadCount": skill.threadCount,
+        "staticTokenEstimate": jsonValue(skill.staticTokenEstimate),
+        "staticByteCount": jsonValue(skill.staticByteCount),
+        "lastLoadedAt": jsonValue(isoString(skill.lastLoadedAt))
+    ] as [String: Any]
+}
+
 private func dumpJSON(_ snapshot: UsageSnapshot) {
     var object: [String: Any] = [
         "refreshedAt": isoString(snapshot.refreshedAt) ?? "",
@@ -3106,6 +5574,37 @@ private func dumpJSON(_ snapshot: UsageSnapshot) {
                 "tokenEventCount": detailed.tokenEventCount
             ] as [String: Any]
         }
+
+        if let trend = local.usageTrend {
+            localObject["usageTrend"] = [
+                "sourceQuality": trend.sourceQuality.rawValue,
+                "dayCount": trend.dayBuckets.count,
+                "activeDayCount": trend.activeDayCount,
+                "sevenDay": jsonObject(trend.summary.sevenDay),
+                "dailyAverageTokens": trend.summary.dailyAverageTokens,
+                "peakDay": trend.summary.peakDay.map { bucket in
+                    [
+                        "day": bucket.id,
+                        "tokens": bucket.tokens,
+                        "estimatedCostUSD": bucket.usage.estimatedCostUSD
+                    ] as [String: Any]
+                } ?? NSNull(),
+                "changePercent": jsonValue(trend.summary.changePercent),
+                "isNewActivity": trend.summary.isNewActivity,
+                "month": jsonObject(trend.month),
+                "projectedMonthCostUSD": jsonValue(trend.projectedMonthCostUSD)
+            ] as [String: Any]
+        }
+
+        if let projectBoard = local.projectBoard {
+            localObject["projectBoard"] = [
+                "recentProjects": projectBoard.recentProjects.prefix(8).map { jsonObject($0) },
+                "allProjects": projectBoard.allProjects.prefix(8).map { jsonObject($0) }
+            ] as [String: Any]
+        }
+
+        localObject["toolUsages"] = local.toolUsages.prefix(20).map { jsonObject($0) }
+        localObject["skillUsages"] = local.skillUsages.prefix(20).map { jsonObject($0) }
 
         object["local"] = localObject
     }
@@ -3257,6 +5756,7 @@ final class DesktopWidgetWindow: NSPanel {
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let store = UsageStore()
+    private let windowState = WindowPresentationState()
     private var window: DesktopWidgetWindow?
     private var statusItem: NSStatusItem?
     private var globalHotKeyRef: EventHotKeyRef?
@@ -3282,7 +5782,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         panel.maxSize = CGSize(width: UsageWidgetView.widgetWidth, height: UsageWidgetView.widgetMaxHeight)
         panel.contentMinSize = panel.minSize
         panel.contentMaxSize = panel.maxSize
-        panel.contentView = GlassHostingContainer(rootView: UsageWidgetView(store: store), cornerRadius: 24)
+        panel.contentView = GlassHostingContainer(
+            rootView: UsageWidgetView(
+                store: store,
+                windowState: windowState,
+                onPinnedFrontChange: { [weak self] isPinned in
+                    self?.setPinnedToFront(isPinned)
+                }
+            ),
+            cornerRadius: 24
+        )
         panel.moveToDesktopLayer()
         window = panel
 
@@ -3298,13 +5807,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func toggleWindowLayer() {
         guard let window else { return }
+        if windowState.isPinnedToFront {
+            setPinnedToFront(false)
+            return
+        }
+
         if isFrontMode {
-            window.moveToDesktopLayer()
-            isFrontMode = false
+            leaveFrontModeIfNeeded()
         } else {
             window.moveToFrontLayer()
             isFrontMode = true
         }
+    }
+
+    func applicationDidResignActive(_ notification: Notification) {
+        leaveFrontModeIfNeeded()
+    }
+
+    func windowDidResignKey(_ notification: Notification) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !NSApp.isActive, !self.windowState.isPinnedToFront else { return }
+            self.leaveFrontModeIfNeeded()
+        }
+    }
+
+    private func setPinnedToFront(_ isPinned: Bool) {
+        guard let window else {
+            windowState.isPinnedToFront = false
+            return
+        }
+
+        windowState.isPinnedToFront = isPinned
+        if isPinned {
+            window.moveToFrontLayer()
+            isFrontMode = true
+        } else {
+            leaveFrontModeIfNeeded(force: true)
+        }
+        updateStatusItemTooltip()
+    }
+
+    private func leaveFrontModeIfNeeded(force: Bool = false) {
+        guard isFrontMode, let window else { return }
+        guard force || !windowState.isPinnedToFront else { return }
+        window.moveToDesktopLayer()
+        isFrontMode = false
     }
 
     @objc private func statusItemClicked() {
@@ -3322,9 +5869,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         } else {
             button.title = "C"
         }
-        button.toolTip = "codexU：点击切换前台/桌面层，快捷键 ⌘U"
+        updateStatusItemTooltip()
         button.target = self
         button.action = #selector(statusItemClicked)
+    }
+
+    private func updateStatusItemTooltip() {
+        guard let button = statusItem?.button else { return }
+        button.toolTip = windowState.isPinnedToFront
+            ? "codexU：已固定前台，点击或按 ⌘U 取消固定"
+            : "codexU：点击临时唤到前台，快捷键 ⌘U"
     }
 
     private func registerGlobalHotKey() {

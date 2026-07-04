@@ -15,17 +15,21 @@ codexU is a macOS desktop widget for tracking OpenAI Codex / ChatGPT Codex quota
 - Shows remaining and used Codex quota for the 5-hour and 7-day windows, including reset times.
 - Summarizes token usage for today, the last 7 days, and lifetime totals with uncached input, cached input, and output splits.
 - Estimates the current month's API-equivalent value from OpenAI API token prices and shows progress against Plus, Pro 100, Pro 200, and the full monthly quota value.
-- Builds a daily task board from local Codex threads and enabled Codex automations.
-- Groups work into active, pending, scheduled, and done columns.
-- Stays on the desktop layer by default, with `Command + U` foreground toggle.
+- Adds lower dashboard tabs for today's tasks, usage trend, project ranking, and Skill usage.
+- Builds a daily task board from local Codex threads and enabled Codex automations, grouped into active, pending, scheduled, and done columns.
+- Shows a six-month daily token heatmap, a last-7-day trend summary, and previous-period comparison.
+- Shows recent and all-time project rankings with tokens, estimated value, thread counts, and recent activity.
+- Shows top tool calls and top Skill usage to explain the structure of local Codex work.
+- Stays on the desktop layer by default, with `Command + U` temporary foreground access that returns to the desktop layer on focus loss, plus a top pin button for always-on-top mode.
 - Supports Chinese and English UI text. The default language follows the system time zone, and the top `中 | EN` switch can override it.
 - Supports system, light, and dark appearance modes. The default follows macOS, and the top appearance switch can override it.
 - Reads data locally and does not upload usage, threads, or account data to a third-party service.
 
 ## Keyboard Shortcuts
 
-- `Command + U`: toggle the widget between desktop layer and foreground layer.
-- Menu bar gauge icon: same toggle as `Command + U`.
+- `Command + U`: temporarily bring the widget from the desktop layer to the foreground; press again while foregrounded to return it to the desktop layer, or let it return automatically on focus loss.
+- Menu bar gauge icon: same temporary foreground toggle as `Command + U`.
+- Top pin button: pin or unpin the widget in the foreground. It is off by default; when enabled, the widget stays in front after focus loss.
 - Top appearance switch: switch between system, light, and dark modes. System mode follows macOS.
 - Top `中 | EN` switch: switch between Chinese and English. Manual selection is kept for the next launch.
 - Refresh button: immediately refresh quota, token usage, trend, and task board.
@@ -44,6 +48,18 @@ codexU is distributed outside the Mac App Store. On first launch, macOS may bloc
 You can also right-click `codexU.app` in Finder and choose **Open**, then confirm the same security prompt.
 
 codexU needs access to local Codex data under `~/.codex/`. If macOS asks for file or folder access, allow it so the widget can read local usage, threads, and automation metadata.
+
+## Install
+
+Download the DMG for your Mac architecture from GitHub Releases:
+
+- Apple Silicon: `codexU-<version>-mac-arm64.dmg`
+- Intel: `codexU-<version>-mac-x86_64.dmg`
+
+1. Open the DMG.
+2. Drag `codexU.app` into the `Applications` folder.
+3. Open codexU from `Applications`.
+4. Complete the **First Install: Privacy & Security** steps above if macOS blocks the first launch.
 
 ## Requirements
 
@@ -94,10 +110,10 @@ make release-all
 Release artifacts are written to `dist/`, for example:
 
 ```text
-dist/codexU-0.2.0-mac-arm64.dmg
-dist/codexU-0.2.0-mac-arm64.dmg.sha256
-dist/codexU-0.2.0-mac-x86_64.dmg
-dist/codexU-0.2.0-mac-x86_64.dmg.sha256
+dist/codexU-0.3.0-mac-arm64.dmg
+dist/codexU-0.3.0-mac-arm64.dmg.sha256
+dist/codexU-0.3.0-mac-x86_64.dmg
+dist/codexU-0.3.0-mac-x86_64.dmg.sha256
 ```
 
 For Developer ID signing and notarization, see [DISTRIBUTION.md](DISTRIBUTION.md).
@@ -108,6 +124,8 @@ For Developer ID signing and notarization, see [DISTRIBUTION.md](DISTRIBUTION.md
 - Local token totals: `~/.codex/state_5.sqlite`.
 - Detailed token splits: `token_count` events in `~/.codex/sessions/**/rollout-*.jsonl` and `~/.codex/archived_sessions/*.jsonl`.
 - Today's board: unarchived and archived Codex threads in the local SQLite database.
+- Usage trends and project rankings: aggregated from local session `token_count` events, with an approximate thread-updated-time fallback when detailed events are unavailable.
+- Tool and Skill usage: tool call and Skill load records parsed from local session events.
 - Scheduled tasks: enabled automation metadata under `~/.codex/automations/**/automation.toml`.
 
 Current Codex quota APIs expose rolling-window percentages and reset times, not absolute account quota sizes. See [RESEARCH.md](RESEARCH.md) for the data model and fallback behavior.

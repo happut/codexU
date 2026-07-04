@@ -17,9 +17,12 @@ codexU 是一个 macOS 桌面小组件，用来查看 OpenAI Codex / ChatGPT Cod
 - 展示 Codex 5 小时和 7 天额度的剩余比例、已用比例和重置时间。
 - 汇总今日、近 7 天和累计 token 用量，并细分未缓存输入、命中缓存输入和输出。
 - 按 OpenAI API token 价格估算本月 API 等效价值，并在 Plus、Pro 100、Pro 200 和满额月价值之间展示进度刻度。
-- 从本机 Codex 线程和启用中的 automations 生成今日任务看板。
-- 按进行中、待处理、定时、完成四类组织任务。
-- 默认贴在桌面层，支持 `Command + U` 一键唤到前台。
+- 下方仪表盘支持今日任务、用量趋势、项目排行和 Skill 使用视图。
+- 从本机 Codex 线程和启用中的 automations 生成今日任务看板，按进行中、待处理、定时、完成四类组织任务。
+- 展示最近半年的每日 token 热力图、最近 7 日趋势摘要和同周期变化。
+- 展示最近 7 天与全部项目排行，包含 token、估算价值、线程数和最近活跃时间。
+- 展示工具调用 TOP 列表和 Skill 使用 TOP 列表，帮助判断本地 Codex 工作结构。
+- 默认贴在桌面层，支持 `Command + U` 一键临时唤到前台，失焦后自动回到桌面层；也可用顶部图钉固定前台。
 - 支持中文和英文界面，可根据系统时区自动选择，也可通过顶部 `中 | EN` 手动切换。
 - 支持自动、浅色和深色外观模式，默认跟随系统设置，也可通过顶部外观切换手动指定。
 - 本地读取数据，不上传 usage、线程或账户数据到第三方服务。
@@ -41,8 +44,9 @@ API 等效价值 =
 
 ## 快捷键和操作
 
-- `Command + U`：在桌面层和前台层之间切换小组件。
-- 菜单栏仪表图标：点击后执行和 `Command + U` 相同的切换操作。
+- `Command + U`：临时将小组件从桌面层唤到前台；前台态下再次按下会回到桌面层，失焦后也会自动回到桌面层。
+- 菜单栏仪表图标：点击后执行和 `Command + U` 相同的临时前台切换操作。
+- 顶部图钉按钮：固定或取消固定前台；默认未开启，开启后失焦也会保持在前台。
 - 顶部外观切换：在自动、浅色和深色模式之间切换；自动模式跟随系统设置。
 - 顶部 `中 | EN`：切换中文或英文界面，手动选择会在下次启动时保留。
 - 右上角刷新按钮：立即刷新额度、token 统计、趋势图和任务看板。
@@ -123,10 +127,10 @@ make release-all
 产物会写入 `dist/`，例如：
 
 ```text
-dist/codexU-0.2.0-mac-arm64.dmg
-dist/codexU-0.2.0-mac-arm64.dmg.sha256
-dist/codexU-0.2.0-mac-x86_64.dmg
-dist/codexU-0.2.0-mac-x86_64.dmg.sha256
+dist/codexU-0.3.0-mac-arm64.dmg
+dist/codexU-0.3.0-mac-arm64.dmg.sha256
+dist/codexU-0.3.0-mac-x86_64.dmg
+dist/codexU-0.3.0-mac-x86_64.dmg.sha256
 ```
 
 Developer ID 签名和 Apple notarization 流程见 [DISTRIBUTION.md](DISTRIBUTION.md)。
@@ -137,6 +141,8 @@ Developer ID 签名和 Apple notarization 流程见 [DISTRIBUTION.md](DISTRIBUTI
 - 本机 token 总量：`~/.codex/state_5.sqlite`。
 - 精细 token 拆分：`~/.codex/sessions/**/rollout-*.jsonl` 和 `~/.codex/archived_sessions/*.jsonl` 中的 `token_count` 事件。
 - 今日任务看板：本机 SQLite 中未归档和今日归档的 Codex 线程。
+- 用量趋势和项目排行：本机 session `token_count` 事件聚合；缺失精细事件时回退到线程更新时间的粗略口径。
+- 工具和 Skill 使用：本机 session 事件中的工具调用与 Skill 加载记录。
 - 定时任务：`~/.codex/automations/**/automation.toml` 中启用的 automation 元数据。
 
 当前 Codex 额度 API 暴露的是滚动窗口百分比和重置时间，不暴露绝对配额数量。更完整的数据口径和回退策略见 [RESEARCH.md](RESEARCH.md)。
