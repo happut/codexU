@@ -1,18 +1,22 @@
 # codexU
 
-codexU is a macOS desktop widget for tracking OpenAI Codex / ChatGPT Codex quota, token usage, and today's task status. It keeps the information you check most on the desktop, so you can quickly see remaining quota, reset times, and daily work progress.
+codexU is a macOS desktop widget for tracking OpenAI Codex / ChatGPT Codex and Claude Code quota, token usage, and today's task status. It keeps the information you check most on the desktop, so you can quickly see remaining quota, reset times, and daily work progress.
 
 ![codexU desktop widget screenshot](docs/screenshot-0.2.0.png)
 
 ## Who It Is For
 
 - Developers who use OpenAI Codex, Codex CLI, or the Codex desktop app every day.
+- Developers who use both Codex and Claude Code and want one local view for both runtimes.
 - ChatGPT Pro / Team users who want a quick view of Codex 5-hour quota, 7-day quota, token usage, and reset times.
 - macOS users who want to check Codex status without repeatedly opening a browser or terminal.
 
 ## Features
 
 - Shows remaining and used Codex quota for the 5-hour and 7-day windows, including reset times.
+- Adds a menu bar runtime menu with separate Codex and Claude Code cards, 5-hour/7-day remaining quota, today's token usage, and total tokens today.
+- Adds a top-level `Codex | Claude Code` switch in the main widget so all panels can switch runtime scope manually.
+- Supports Claude Code local transcript usage, 7-day trends, project rankings, top tools/Skills, and a basic task board.
 - Summarizes token usage for today, the last 7 days, and lifetime totals with uncached input, cached input, and output splits.
 - Estimates the current month's API-equivalent value from OpenAI API token prices and shows progress against Plus, Pro 100, Pro 200, and the full monthly quota value.
 - Adds lower dashboard tabs for today's tasks, usage trend, project ranking, and Skill usage.
@@ -28,7 +32,7 @@ codexU is a macOS desktop widget for tracking OpenAI Codex / ChatGPT Codex quota
 ## Keyboard Shortcuts
 
 - `Command + U`: temporarily bring the widget from the desktop layer to the foreground; press again while foregrounded to return it to the desktop layer, or let it return automatically on focus loss.
-- Menu bar gauge icon: same temporary foreground toggle as `Command + U`.
+- Menu bar gauge icon: opens the runtime menu. Clicking a Codex or Claude Code card opens the main widget with that runtime selected.
 - Top pin button: pin or unpin the widget in the foreground. It is off by default; when enabled, the widget stays in front after focus loss.
 - Top appearance switch: switch between system, light, and dark modes. System mode follows macOS.
 - Top `中 | EN` switch: switch between Chinese and English. Manual selection is kept for the next launch.
@@ -47,7 +51,7 @@ codexU is distributed outside the Mac App Store. On first launch, macOS may bloc
 
 You can also right-click `codexU.app` in Finder and choose **Open**, then confirm the same security prompt.
 
-codexU needs access to local Codex data under `~/.codex/`. If macOS asks for file or folder access, allow it so the widget can read local usage, threads, and automation metadata.
+codexU needs access to local Codex data under `~/.codex/`. When Claude Code stats are used, it also reads local transcripts, tasks, and status cache files under `~/.claude/`. If macOS asks for file or folder access, allow it so the widget can read local usage, threads, and automation metadata.
 
 ## Install
 
@@ -67,6 +71,7 @@ Download the DMG for your Mac architecture from GitHub Releases:
 - A local Codex installation.
 - A signed-in Codex account for quota data.
 - Codex must have been used at least once so `~/.codex/state_5.sqlite` exists.
+- Claude Code support is optional. Historical tokens come from `~/.claude/projects/**/*.jsonl`; quota requires a local statusLine snapshot cache.
 - Xcode Command Line Tools for building from source.
 
 ## Build From Source
@@ -127,8 +132,11 @@ For Developer ID signing and notarization, see [DISTRIBUTION.md](DISTRIBUTION.md
 - Usage trends and project rankings: aggregated from local session `token_count` events, with an approximate thread-updated-time fallback when detailed events are unavailable.
 - Tool and Skill usage: tool call and Skill load records parsed from local session events.
 - Scheduled tasks: enabled automation metadata under `~/.codex/automations/**/automation.toml`.
+- Claude Code historical tokens: assistant `message.usage` fields in `~/.claude/projects/**/*.jsonl`.
+- Claude Code tools, Skills, and tasks: transcript `tool_use.name` / explicit Skill attribution, plus `~/.claude/tasks/**/*.json`.
+- Claude Code active quota: optional `~/Library/Caches/codexU/claude-code/statusline-snapshot.json`; without it, 5-hour and 7-day quota show `--`.
 
-Current Codex quota APIs expose rolling-window percentages and reset times, not absolute account quota sizes. See [RESEARCH.md](RESEARCH.md) for the data model and fallback behavior.
+Current Codex quota APIs expose rolling-window percentages and reset times, not absolute account quota sizes. Claude Code v0.4.0 reads local history and an optional active snapshot; it is not a Claude.ai official billing view. See [RESEARCH.md](RESEARCH.md) for the data model and fallback behavior.
 
 ## FAQ
 

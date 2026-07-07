@@ -22,5 +22,9 @@ codexU reads:
 - `~/.codex/state_5.sqlite`
 - `~/.codex/automations/**/automation.toml`
 - local responses from `codex app-server`
+- `~/.codex/sessions/**/rollout-*.jsonl` and `~/.codex/archived_sessions/*.jsonl` token metadata
+- `~/.claude/projects/**/*.jsonl` assistant `message.usage` and `tool_use.name` metadata
+- `~/.claude/tasks/**/*.json` task status/title metadata
+- optional `~/Library/Caches/codexU/claude-code/statusline-snapshot.json`
 
-It should not upload local usage or thread data to a third-party service.
+It should not upload local usage, transcript, task, thread, account, or path data to a third-party service. Claude Code transcript parsing must not store prompt text, assistant response text, tool arguments, or tool output.

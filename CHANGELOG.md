@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.0 - 2026-07-07
+
+- Added a multi-runtime usage architecture with Codex and Claude Code providers.
+- Added Claude Code local transcript parsing for tokens, trends, projects, tool usage, Skill usage, and tasks.
+- Added a menu bar runtime popover with Codex and Claude Code summary cards and total tokens today.
+- Added a top-level Codex / Claude Code switch in the main widget.
+- Added runtime-aware `--dump-json` output with `schemaVersion: 2`, `aggregate`, `runtimes[]`, and legacy Codex compatibility fields.
+- Added local statusLine snapshot support for Claude Code active quota, with missing/stale diagnostics.
+
 ## 0.3.0 - 2026-07-04
 
 - Reworked the lower dashboard into three tabs: today's task board, usage trend, and project board.

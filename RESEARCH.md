@@ -100,3 +100,17 @@ The widget displays both kinds of data separately:
 - Detailed token split and API-equivalent value: from local JSONL `token_count` events, with SQLite as the source of session paths and model names.
 
 If app-server is unavailable, the widget falls back to SQLite-only mode and marks account-limit data as unavailable.
+
+## Claude Code local support
+
+Claude Code does not expose the same local `account/rateLimits/read` app-server API as Codex. v0.4.0 therefore separates historical usage from active quota:
+
+- Historical token usage: parsed from assistant `message.usage` fields in `~/.claude/projects/**/*.jsonl`.
+- Cache split: `cache_creation_input_tokens` and `cache_read_input_tokens` are mapped into the widget's cached input bucket so existing UI cards can show uncached/cached/output splits.
+- Project attribution: uses transcript `cwd` first, then best-effort decoding of the Claude project directory name.
+- Tool usage: counts only `tool_use.name`; it does not retain tool arguments or output.
+- Skill usage: uses explicit Skill attribution fields when present and the `Skill` tool name as a fallback.
+- Task board: reads `~/.claude/tasks/**/*.json` status and subject fields.
+- Active quota: optional `~/Library/Caches/codexU/claude-code/statusline-snapshot.json` with 5-hour and 7-day used percentages. Missing snapshots are shown as unavailable, and snapshots older than 15 minutes are marked stale.
+
+Claude Code API-equivalent value is an estimate from a small built-in Claude model price table. Unknown models still contribute tokens, but their dollar value is omitted from the estimate.
