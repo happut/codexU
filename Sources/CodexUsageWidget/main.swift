@@ -503,11 +503,24 @@ private struct LocalAnalyticsCacheEntry: Codable {
 
 final class UsageStore: ObservableObject {
     @Published var snapshot: UsageSnapshot = .empty
+    @Published var multiRuntimeSnapshot: MultiRuntimeUsageSnapshot = .empty
+    @Published var runtimeSnapshots: [RuntimeUsageSnapshot] = []
+    @Published var selectedRuntimeScope: RuntimeScope = .codex
     @Published var isRefreshing = false
 
     private var fullTimer: Timer?
     private var taskBoardTimer: Timer?
     private var isRefreshingTaskBoard = false
+
+    var runtimeSummaries: [RuntimeMenuSummary] {
+        RuntimeScope.allCases.compactMap { scope in
+            runtimeSnapshot(for: scope)?.summary
+        }
+    }
+
+    var totalTodayTokens: Int64 {
+        multiRuntimeSnapshot.totalTodayTokens
+    }
 
     func start() {
         refresh()
@@ -529,24 +542,60 @@ final class UsageStore: ObservableObject {
         isRefreshing = true
 
         DispatchQueue.global(qos: .utility).async {
-            let snapshot = CodexUsageReader().load()
+            let multiSnapshot = MultiRuntimeUsageReader().load()
             DispatchQueue.main.async {
-                self.snapshot = snapshot
+                self.apply(multiSnapshot)
                 self.isRefreshing = false
             }
         }
     }
 
+    func selectRuntime(_ scope: RuntimeScope) {
+        selectedRuntimeScope = scope
+        snapshot = multiRuntimeSnapshot.displaySnapshot(for: scope)
+    }
+
+    func runtimeSnapshot(for scope: RuntimeScope) -> RuntimeUsageSnapshot? {
+        runtimeSnapshots.first { $0.scope == scope }
+    }
+
     private func refreshTaskBoard() {
         guard !isRefreshing, !isRefreshingTaskBoard else { return }
         isRefreshingTaskBoard = true
+        let scope = selectedRuntimeScope
 
         DispatchQueue.global(qos: .utility).async {
-            let taskBoard = CodexUsageReader().loadTaskBoard()
+            let taskBoard = MultiRuntimeUsageReader().loadTaskBoard(scope: scope)
             DispatchQueue.main.async {
-                self.snapshot = self.snapshot.replacingTaskBoard(taskBoard)
+                self.applyTaskBoard(taskBoard, for: scope)
                 self.isRefreshingTaskBoard = false
             }
+        }
+    }
+
+    private func apply(_ multiSnapshot: MultiRuntimeUsageSnapshot) {
+        let nextScope = multiSnapshot.defaultScope(preferred: selectedRuntimeScope)
+        multiRuntimeSnapshot = multiSnapshot
+        runtimeSnapshots = multiSnapshot.runtimes
+        selectedRuntimeScope = nextScope
+        snapshot = multiSnapshot.displaySnapshot(for: nextScope)
+    }
+
+    private func applyTaskBoard(_ taskBoard: TaskBoard?, for scope: RuntimeScope) {
+        guard let index = runtimeSnapshots.firstIndex(where: { $0.scope == scope }) else {
+            snapshot = snapshot.replacingTaskBoard(taskBoard)
+            return
+        }
+
+        runtimeSnapshots[index] = runtimeSnapshots[index].replacingTaskBoard(taskBoard)
+        let aggregate = AgentUsageAggregator().aggregate(runtimeSnapshots, at: multiRuntimeSnapshot.refreshedAt)
+        multiRuntimeSnapshot = MultiRuntimeUsageSnapshot(
+            refreshedAt: multiRuntimeSnapshot.refreshedAt,
+            runtimes: runtimeSnapshots,
+            aggregate: aggregate
+        )
+        if selectedRuntimeScope == scope {
+            snapshot = runtimeSnapshots[index].snapshot
         }
     }
 }
@@ -2494,6 +2543,12 @@ struct UsageWidgetView: View {
                     .foregroundStyle(.primary)
             }
             Spacer()
+            RuntimeSelector(
+                selected: store.selectedRuntimeScope,
+                language: language
+            ) { scope in
+                store.selectRuntime(scope)
+            }
             ThemeSwitch(themeMode: themeMode, language: language) { selectedMode in
                 themeMode = selectedMode
                 selectedMode.persist()
@@ -2762,6 +2817,47 @@ struct UsageWidgetView: View {
     private var environmentDiagnostics: [DiagnosticItem] {
         var items: [DiagnosticItem] = []
         let messages = snapshot.messages.joined(separator: "\n")
+
+        if store.selectedRuntimeScope == .claudeCode {
+            if snapshot.primary == nil || snapshot.secondary == nil {
+                let isStale = messages.contains("快照已过期")
+                items.append(DiagnosticItem(
+                    id: isStale ? "claude-statusline-stale" : "claude-statusline-missing",
+                    title: isStale
+                        ? language.text("Claude Code 快照已过期", "Claude Code snapshot is stale")
+                        : language.text("额度需要 Claude Code active session 快照", "Quota needs a Claude Code active session snapshot"),
+                    detail: isStale
+                        ? language.text("打开 Claude Code 后刷新；本机 token 统计仍可继续显示。", "Open Claude Code and refresh. Local token stats can still be shown.")
+                        : language.text("首版只读取本地 statusLine 快照；没有快照时 5 小时和 7 日额度显示为 --。", "This version only reads a local statusLine snapshot. 5-hour and 7-day quota show -- without it."),
+                    systemName: isStale ? "clock.badge.exclamationmark" : "waveform.path.ecg",
+                    tint: isStale ? WidgetPalette.statusInfo : WidgetPalette.statusWarning
+                ))
+            }
+
+            if snapshot.local == nil || snapshot.local?.detailedUsage == nil {
+                items.append(DiagnosticItem(
+                    id: "claude-local-usage",
+                    title: language.text("暂无 Claude Code 本机用量记录", "No local Claude Code usage records yet"),
+                    detail: language.text("本机 token 统计来自 ~/.claude/projects 下的 transcript JSONL，只读取 usage 和工具名称等结构化字段。", "Local token stats come from transcript JSONL under ~/.claude/projects and only read structured usage and tool names."),
+                    systemName: "doc.text.magnifyingglass",
+                    tint: WidgetPalette.statusInfo
+                ))
+            }
+
+            if items.isEmpty {
+                items = snapshot.messages.prefix(3).enumerated().map { index, message in
+                    DiagnosticItem(
+                        id: "claude-message-\(index)",
+                        title: language.text("运行提示", "Runtime note"),
+                        detail: localizedReaderMessage(message, language: language),
+                        systemName: "info.circle.fill",
+                        tint: WidgetPalette.statusInfo
+                    )
+                }
+            }
+
+            return items
+        }
 
         if snapshot.primary == nil || snapshot.account == nil {
             if messages.contains("未找到 codex") {
@@ -5759,6 +5855,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let windowState = WindowPresentationState()
     private var window: DesktopWidgetWindow?
     private var statusItem: NSStatusItem?
+    private var statusPopover: NSPopover?
     private var globalHotKeyRef: EventHotKeyRef?
     private var globalHotKeyHandler: EventHandlerRef?
     private var isFrontMode = false
@@ -5855,7 +5952,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     @objc private func statusItemClicked() {
-        toggleWindowLayer()
+        toggleStatusPopover()
+    }
+
+    private func toggleStatusPopover() {
+        if statusPopover?.isShown == true {
+            statusPopover?.performClose(nil)
+            return
+        }
+
+        guard let button = statusItem?.button else { return }
+        let popover = NSPopover()
+        popover.behavior = .transient
+        popover.animates = true
+        popover.contentSize = CGSize(width: 380, height: 372)
+        popover.contentViewController = NSHostingController(
+            rootView: RuntimeStatusMenuView(
+                store: store,
+                openRuntime: { [weak self] scope in
+                    self?.openMainWindow(selecting: scope)
+                },
+                openCurrent: { [weak self] in
+                    self?.openMainWindow(selecting: nil)
+                },
+                quit: {
+                    NSApp.terminate(nil)
+                }
+            )
+        )
+        statusPopover = popover
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+    }
+
+    private func openMainWindow(selecting scope: RuntimeScope?) {
+        if let scope {
+            store.selectRuntime(scope)
+        }
+        statusPopover?.performClose(nil)
+        window?.moveToFrontLayer()
+        isFrontMode = true
     }
 
     private func setupStatusItem() {
@@ -5878,7 +6013,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard let button = statusItem?.button else { return }
         button.toolTip = windowState.isPinnedToFront
             ? "codexU：已固定前台，点击或按 ⌘U 取消固定"
-            : "codexU：点击临时唤到前台，快捷键 ⌘U"
+            : "codexU：点击查看 Runtime 用量菜单，快捷键 ⌘U"
     }
 
     private func registerGlobalHotKey() {
@@ -5940,7 +6075,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 struct codexUMain {
     static func main() {
         if CommandLine.arguments.contains("--dump-json") {
-            dumpJSON(CodexUsageReader().load())
+            dumpJSON(MultiRuntimeUsageReader().load())
             return
         }
 
