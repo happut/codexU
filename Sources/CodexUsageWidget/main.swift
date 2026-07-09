@@ -3258,7 +3258,7 @@ struct SettingsPanelView: View {
 
                     SettingsToggleRow(
                         title: language.text("关闭后继续后台运行", "Keep running after closing the window"),
-                        detail: language.text("关闭主窗口会隐藏Dock图标，可从菜单栏或快捷键再次打开", "Closing the main window hides the Dock icon; reopen from the menu bar or shortcut")
+                        detail: language.text("关闭主窗口会隐藏 Dock 图标，可从菜单栏或快捷键再次打开", "Closing the main window hides the Dock icon; reopen from the menu bar or shortcut")
                     ) {
                         SettingsSwitchToggle(isOn: $settings.keepRunningWhenMainWindowClosed)
                     }
