@@ -7199,6 +7199,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
 @main
 struct codexUMain {
     static func main() {
+        if CommandLine.arguments.contains("--self-test-updates") {
+            exit(AppUpdateSelfTest.run() ? 0 : 1)
+        }
+
         if CommandLine.arguments.contains("--dump-json") {
             dumpJSON(MultiRuntimeUsageReader().load())
             return
