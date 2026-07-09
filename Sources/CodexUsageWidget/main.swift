@@ -3224,8 +3224,8 @@ struct SettingsPanelView: View {
                 }
 
                 SettingsToggleRow(
-                    title: language.text("关闭后继续在菜单栏运行", "Keep running after closing the window"),
-                    detail: language.text("关闭主窗口不会退出应用，可从菜单栏再次打开", "Closing the main window keeps the menu bar item available")
+                    title: language.text("关闭后继续后台运行", "Keep running after closing the window"),
+                    detail: language.text("关闭主窗口会隐藏Dock图标，可从菜单栏或快捷键再次打开", "Closing the main window hides the Dock icon; reopen from the menu bar or shortcut")
                 ) {
                     SettingsSwitchToggle(isOn: $settings.keepRunningWhenMainWindowClosed)
                 }
@@ -6552,7 +6552,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         debugLog("app launched bundle=\(Bundle.main.bundlePath)")
 
         createMainWindow()
-        setupStatusItem()
+        setupStatusItemIfNeeded()
         observeStatusItemUsage()
         observeSettings()
         registerGlobalHotKey()
@@ -6640,7 +6640,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         if sender === window {
             if settings.keepRunningWhenMainWindowClosed {
-                sender.orderOut(nil)
+                hideMainWindowAfterClose()
             } else {
                 NSApp.terminate(nil)
             }
@@ -6651,6 +6651,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
 
     private func showMainWindow() {
         guard let window else { return }
+        NSApp.setActivationPolicy(.regular)
+        setupStatusItemIfNeeded()
         closeStatusPopover()
         applyMainWindowLevel()
         if window.isMiniaturized {
@@ -6658,6 +6660,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         }
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func hideMainWindowAfterClose() {
+        closeStatusPopover()
+        window?.orderOut(nil)
+        NSApp.setActivationPolicy(.accessory)
     }
 
     private func applyMainWindowLevel() {
@@ -6945,6 +6953,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         updateStatusItem()
         button.target = self
         button.action = #selector(statusItemClicked)
+    }
+
+    private func setupStatusItemIfNeeded() {
+        guard statusItem == nil else {
+            updateStatusItem()
+            return
+        }
+        setupStatusItem()
     }
 
     private func observeStatusItemUsage() {
