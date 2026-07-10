@@ -80,7 +80,10 @@ struct RuntimeUsageSnapshot: Identifiable, Equatable {
     var displayName: String { scope.displayName }
 
     var todayTokens: Int64? {
-        snapshot.local?.todayTokens
+        preferredRuntimeTodayTokens(
+            detailed: snapshot.local?.detailedUsage?.today.tokens.visibleTotalTokens,
+            fallback: snapshot.local?.todayTokens
+        )
     }
 
     var summary: RuntimeMenuSummary {
@@ -106,6 +109,10 @@ struct RuntimeUsageSnapshot: Identifiable, Equatable {
             usageSourceLabel: usageSourceLabel
         )
     }
+}
+
+func preferredRuntimeTodayTokens(detailed: Int64?, fallback: Int64?) -> Int64? {
+    detailed ?? fallback
 }
 
 struct MultiRuntimeUsageSnapshot: Equatable {

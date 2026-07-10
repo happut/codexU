@@ -154,6 +154,14 @@ enum StatisticsTimeZoneSelfTest {
         defaults.set("fixed", forKey: "codexU.statisticsTimeZone.selection")
         defaults.set("Invalid/Zone", forKey: "codexU.statisticsTimeZone.fixedIdentifier")
         expect(StatisticsTimeZonePreferenceStore.load(defaults: defaults).selection == .system, "invalid zone repair")
+        expect(
+            preferredRuntimeTodayTokens(detailed: 490_100_000, fallback: 650_900_000) == 490_100_000,
+            "runtime summaries must prefer detailed token_count usage"
+        )
+        expect(
+            preferredRuntimeTodayTokens(detailed: nil, fallback: 650_900_000) == 650_900_000,
+            "runtime summaries should use SQLite only as a fallback"
+        )
 
         let sampleEvents = (0..<25_000).map { index in
             Date(timeIntervalSince1970: 1_767_225_600 + Double(index * 37))
