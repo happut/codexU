@@ -71,17 +71,16 @@ struct StatusItemRenderer {
 
     private func drawMinimal(_ presentation: StatusItemPresentation) {
         let quotaMetrics = presentation.quotaMetrics
-        drawRuntimeLogo(presentation.runtime, in: NSRect(x: 6, y: 4, width: 14, height: 14))
 
         for (index, metric) in quotaMetrics.prefix(2).enumerated() {
             let rect: NSRect
             let lineWidth: CGFloat
             if index == 0 {
-                rect = NSRect(x: 3, y: 2, width: 20, height: 18)
-                lineWidth = 1.5
+                rect = StatusItemLayoutMetrics.minimalOuterRingRect
+                lineWidth = StatusItemLayoutMetrics.minimalOuterRingLineWidth
             } else {
-                rect = NSRect(x: 5.5, y: 4.5, width: 15, height: 13)
-                lineWidth = 1.2
+                rect = StatusItemLayoutMetrics.minimalInnerRingRect
+                lineWidth = StatusItemLayoutMetrics.minimalInnerRingLineWidth
             }
             drawCircularProgress(
                 in: rect,
@@ -91,6 +90,11 @@ struct StatusItemRenderer {
                 lineWidth: lineWidth
             )
         }
+
+        drawRuntimeLogo(
+            presentation.runtime,
+            in: StatusItemLayoutMetrics.minimalLogoRect
+        )
     }
 
     private func drawClassic(_ presentation: StatusItemPresentation) {

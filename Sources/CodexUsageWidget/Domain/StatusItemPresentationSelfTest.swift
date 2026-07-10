@@ -119,6 +119,23 @@ enum StatusItemPresentationSelfTest {
         minimalPreferences.displayMode = .minimal
         let minimal = builder.build(source: source, preferences: minimalPreferences, language: .en, now: now)
         expect(minimal.itemLength <= 36, "minimal double-ring item should stay within 36pt")
+        let minimalLogoRect = StatusItemLayoutMetrics.minimalLogoRect
+        let minimalInnerRingRect = StatusItemLayoutMetrics.minimalInnerRingRect
+        expect(
+            minimalLogoRect.midX == minimalInnerRingRect.midX
+                && minimalLogoRect.midY == minimalInnerRingRect.midY,
+            "minimal logo and quota rings should share one center"
+        )
+        let minimalLogoHalfDiagonal = StatusItemLayoutMetrics.minimalLogoSize / CGFloat(2).squareRoot()
+        let minimalInnerRingInnerRadius = (
+            StatusItemLayoutMetrics.minimalInnerRingDiameter
+                - StatusItemLayoutMetrics.minimalInnerRingLineWidth
+        ) / 2
+        expect(
+            minimalLogoHalfDiagonal + StatusItemLayoutMetrics.minimalLogoClearance
+                <= minimalInnerRingInnerRadius,
+            "minimal logo should remain clear of the inner quota ring"
+        )
 
         var classicPreferences = StatusItemPreferences.default
         classicPreferences.displayMode = .classic

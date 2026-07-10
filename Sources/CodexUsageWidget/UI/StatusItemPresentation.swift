@@ -88,6 +88,12 @@ enum StatusItemLayoutMetrics {
     static let imageHeight: CGFloat = 22
     static let itemOuterPadding: CGFloat = 8
     static let minimalImageWidth: CGFloat = 26
+    static let minimalOuterRingDiameter: CGFloat = 20
+    static let minimalInnerRingDiameter: CGFloat = 16
+    static let minimalOuterRingLineWidth: CGFloat = 1.5
+    static let minimalInnerRingLineWidth: CGFloat = 1.2
+    static let minimalLogoSize: CGFloat = 9
+    static let minimalLogoClearance: CGFloat = 0.75
     static let leadingContentWidth: CGFloat = 22
     static let classicQuotaUnitWidth: CGFloat = 23
     static let classicTokenUnitWidth: CGFloat = 42
@@ -95,6 +101,27 @@ enum StatusItemLayoutMetrics {
     static let richQuotaWidthWithoutReset: CGFloat = 98
     static let richTokenOnlyWidth: CGFloat = 70
     static let richTokenExtensionWidth: CGFloat = 44
+
+    static var minimalOuterRingRect: NSRect {
+        centeredMinimalRect(side: minimalOuterRingDiameter)
+    }
+
+    static var minimalInnerRingRect: NSRect {
+        centeredMinimalRect(side: minimalInnerRingDiameter)
+    }
+
+    static var minimalLogoRect: NSRect {
+        centeredMinimalRect(side: minimalLogoSize)
+    }
+
+    private static func centeredMinimalRect(side: CGFloat) -> NSRect {
+        NSRect(
+            x: (minimalImageWidth - side) / 2,
+            y: (imageHeight - side) / 2,
+            width: side,
+            height: side
+        )
+    }
 
     static func imageWidth(for preferences: StatusItemPreferences) -> CGFloat {
         let normalized = preferences.normalized()
