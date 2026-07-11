@@ -3401,10 +3401,12 @@ struct SettingsPanelView: View {
                     }
 
                     if let error = settings.globalShortcutError {
-                        SettingsValueRow(
+                        SettingsErrorRow(
                             title: language.text("快捷键不可用", "Shortcut unavailable"),
-                            detail: error.message(language: language),
-                            value: settings.globalShortcut?.displayName ?? language.text("未设置", "Not set")
+                            message: error.message(language: language),
+                            currentValue: settings.globalShortcut.map {
+                                language.text("当前仍使用 \($0.displayName)", "Still using \($0.displayName)")
+                            } ?? language.text("当前未设置全局快捷键", "No global shortcut is currently set")
                         )
                     }
                 }
@@ -3669,6 +3671,51 @@ struct SettingsValueRow: View {
                 .monospacedDigit()
                 .lineLimit(1)
         }
+    }
+}
+
+struct SettingsErrorRow: View {
+    @Environment(\.colorScheme) private var colorScheme
+    let title: String
+    let message: String
+    let currentValue: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(WidgetPalette.statusDanger)
+                .frame(width: 18, height: 18)
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(WidgetPalette.statusDanger)
+                Text(message)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(currentValue)
+                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: settingsControlCornerRadius, style: .continuous)
+                .fill(WidgetPalette.statusDangerFill(colorScheme))
+                .overlay(
+                    RoundedRectangle(cornerRadius: settingsControlCornerRadius, style: .continuous)
+                        .strokeBorder(WidgetPalette.statusDangerStroke(colorScheme), lineWidth: 0.8)
+                )
+        )
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -6362,6 +6409,14 @@ enum WidgetPalette {
 
     static func controlStroke(_ colorScheme: ColorScheme) -> Color {
         colorScheme == .dark ? Color.white.opacity(0.070) : Color.black.opacity(0.050)
+    }
+
+    static func statusDangerFill(_ colorScheme: ColorScheme) -> Color {
+        statusDanger.opacity(colorScheme == .dark ? 0.14 : 0.08)
+    }
+
+    static func statusDangerStroke(_ colorScheme: ColorScheme) -> Color {
+        statusDanger.opacity(colorScheme == .dark ? 0.34 : 0.24)
     }
 }
 
