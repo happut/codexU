@@ -76,11 +76,13 @@ git diff --check
 
 ## Package
 
-Build both macOS architectures with the repository release target:
+Run the deterministic repository wrapper:
 
 ```sh
-make release-all
+make release-package
 ```
+
+It runs the self-tests, builds both architectures, checks the DMGs and checksums, mounts both images, verifies Mach-O architecture, and verifies codesign. Do not manually repeat those steps unless debugging the wrapper.
 
 Expect these assets for `<version>`:
 
@@ -97,6 +99,14 @@ Verify checksums and copy the values into release notes:
 cat dist/codexU-<version>-mac-arm64.dmg.sha256
 cat dist/codexU-<version>-mac-x86_64.dmg.sha256
 ```
+
+After filling release notes, run the metadata gate:
+
+```sh
+make release-check
+```
+
+Do not create the release commit or tag until this command passes.
 
 Do not claim Apple notarization unless a notarization step was actually run. The current Makefile release flow uses the signing behavior configured in the repository.
 
