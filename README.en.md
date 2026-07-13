@@ -1,7 +1,7 @@
 # codexU
 
 > [!IMPORTANT]
-> **Upgrade to v1.0.4 or later.** v1.0.4 fixes a menu bar repaint feedback loop that could consume a CPU core while idle, reduces background task polling, and bounds the long-lived session cache. It retains support for ChatGPT.app, legacy Codex.app paths, and the standard CLI. [Download the latest release](https://github.com/shanggqm/codexU/releases/latest).
+> **Upgrade to v1.0.4 or later.** v1.0.4 fixes a menu bar repaint feedback loop that could consume a CPU core while idle, prevents a weekly-only Codex quota from being mislabeled as the 5-hour quota, reduces background task polling, and bounds the long-lived session cache. It retains support for ChatGPT.app, legacy Codex.app paths, and the standard CLI. [Download the latest release](https://github.com/shanggqm/codexU/releases/latest).
 
 codexU is a macOS menu bar and desktop app for tracking OpenAI Codex / ChatGPT Codex and Claude Code quota, token usage, and today's task status. It keeps the information you check most in the menu bar and main window, so you can quickly see remaining quota, reset times, and daily work progress.
 
@@ -16,7 +16,7 @@ codexU is a macOS menu bar and desktop app for tracking OpenAI Codex / ChatGPT C
 
 ## Features
 
-- Shows remaining and used Codex quota for the 5-hour and 7-day windows, including reset times.
+- Shows remaining and used Codex quota for the 5-hour and 7-day windows, including reset times; quota types are classified by their protocol-reported durations so single-window and reordered responses remain correctly labeled.
 - Adds a menu bar runtime menu with separate Codex and Claude Code cards, 5-hour/7-day remaining quota, today's token usage, and total tokens today.
 - Offers transparent Minimal, Classic, and Rich menu bar modes: Minimal keeps only thicker concentric 5h/7d rings, Classic keeps only the quota number inside each progress ring, and Rich keeps full labels, bars, and reset times.
 - Lets you switch menu bar quotas between used and remaining, choose 5-hour, 7-day, today tokens, and reset countdown, and keeps 5h/7d progress colors aligned with the main blue-purple quota rings.

@@ -1,7 +1,7 @@
 # codexU
 
 > [!IMPORTANT]
-> **建议升级到 v1.0.4 或更高版本。** v1.0.4 修复菜单栏状态项可能触发的高 CPU 重绘回环，并降低后台任务轮询与长期 session 缓存的能耗和内存成本；同时继续兼容 ChatGPT.app、旧版 Codex.app 与标准 CLI 路径。[下载最新版本](https://github.com/shanggqm/codexU/releases/latest)。
+> **建议升级到 v1.0.4 或更高版本。** v1.0.4 修复菜单栏状态项可能触发的高 CPU 重绘回环、Codex 单独返回 7 天窗口时被误标为 5 小时额度的问题，并降低后台任务轮询与长期 session 缓存的能耗和内存成本；同时继续兼容 ChatGPT.app、旧版 Codex.app 与标准 CLI 路径。[下载最新版本](https://github.com/shanggqm/codexU/releases/latest)。
 
 [English](README.en.md)
 
@@ -28,7 +28,7 @@ codexU 是一个 macOS 菜单栏与桌面应用，用来查看 OpenAI Codex / Ch
 
 ## 功能
 
-- 展示 Codex 5 小时和 7 天额度的剩余比例、已用比例和重置时间。
+- 展示 Codex 5 小时和 7 天额度的剩余比例、已用比例和重置时间；按协议返回的实际窗口时长识别额度类型，单窗口或顺序变化时不会误标。
 - 新增状态栏 Runtime 菜单：点击菜单栏图标后先展示 Codex / Claude Code 卡片、5 小时和 7 日剩余、今日 token 与总 token。
 - 状态栏支持简约、经典、丰富三档透明显示：简约只保留加粗的 5h/7d 同心双环，经典的独立进度环内只保留额度数字，丰富展示完整标签、进度条和重置时间。
 - 状态栏额度可切换“已用量 / 剩余量”口径，并可选择显示 5 小时、7 天、今日 token 和重置倒计时；5h/7d 进度色与主界面蓝紫双环一致。
