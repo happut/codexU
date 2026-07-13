@@ -2790,6 +2790,7 @@ enum DashboardTab: String, CaseIterable, Equatable, Identifiable {
     case usage
     case projects
     case skills
+    case maintainer
 
     var id: String { rawValue }
 }
@@ -2800,6 +2801,7 @@ final class WindowPresentationState: ObservableObject {
 
 struct UsageWidgetView: View {
     @ObservedObject var store: UsageStore
+    @ObservedObject var maintainerStore: MaintainerStore
     @ObservedObject var settings: AppSettings
     @ObservedObject var updateStore: AppUpdateStore
     @Environment(\.colorScheme) private var colorScheme
@@ -3011,6 +3013,8 @@ struct UsageWidgetView: View {
                 toolUsages: snapshot.local?.toolUsages ?? [],
                 language: language
             )
+        case .maintainer:
+            MaintainerPanel(store: maintainerStore, language: language)
         }
     }
 
@@ -3060,6 +3064,11 @@ struct UsageWidgetView: View {
             let skillCount = snapshot.local?.skillUsages.count ?? 0
             let toolCount = snapshot.local?.toolUsages.count ?? 0
             return language.text("\(skillCount) Skill · \(toolCount) 工具", "\(skillCount) skills · \(toolCount) tools")
+        case .maintainer:
+            return language.text(
+                "\(maintainerStore.awaitingApprovalCount) 待批准 · \(maintainerStore.activeCount) 处理中",
+                "\(maintainerStore.awaitingApprovalCount) approvals · \(maintainerStore.activeCount) active"
+            )
         }
     }
 
@@ -6530,7 +6539,7 @@ private let dashboardCardHeaderSpacing: CGFloat = 8
 private let dashboardCardContentSpacing: CGFloat = 8
 private let dashboardHeaderControlHeight: CGFloat = 24
 let titlebarControlHeight: CGFloat = 18
-private let dashboardTabSegmentWidth: CGFloat = 96
+private let dashboardTabSegmentWidth: CGFloat = 91
 private let dashboardTabIconWidth: CGFloat = 14
 private let dashboardTabHorizontalPadding: CGFloat = 10
 private let dashboardCardIconSize: CGFloat = 12
@@ -6621,6 +6630,8 @@ private func localizedDashboardTitle(_ tab: DashboardTab, language: WidgetLangua
         return language.text("项目排行", "Project ranking")
     case .skills:
         return language.text("Skill 使用", "Skill usage")
+    case .maintainer:
+        return language.text("维护机器人", "Maintainer")
     }
 }
 
@@ -6634,6 +6645,8 @@ private func localizedDashboardTabLabel(_ tab: DashboardTab, language: WidgetLan
         return language.text("项目排行", "Projects")
     case .skills:
         return "Skill"
+    case .maintainer:
+        return language.text("维护", "Maintain")
     }
 }
 
@@ -6647,6 +6660,8 @@ private func dashboardTabIcon(_ tab: DashboardTab) -> String {
         return "folder"
     case .skills:
         return "puzzlepiece.extension"
+    case .maintainer:
+        return "checkmark.shield"
     }
 }
 
@@ -7234,8 +7249,10 @@ final class MainAppWindow: NSWindow {
     }
 }
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPopoverDelegate {
     private let store = UsageStore()
+    private let maintainerStore = MaintainerStore()
     private let settings = AppSettings()
     private lazy var updateStore = AppUpdateStore(settings: settings)
     private var window: MainAppWindow?
@@ -7264,6 +7281,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         registerGlobalHotKey()
         store.updateVisibleRuntimeScopes(settings.visibleRuntimeScopes)
         store.start()
+        maintainerStore.start()
         updateStore.startAutomaticCheck()
     }
 
@@ -7285,6 +7303,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         mainWindow.contentView = GlassHostingContainer(
             rootView: UsageWidgetView(
                 store: store,
+                maintainerStore: maintainerStore,
                 settings: settings,
                 updateStore: updateStore
             ),
@@ -7320,6 +7339,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         statusItemAppearanceObservation = nil
         unregisterGlobalHotKey()
         store.stop()
+        maintainerStore.stop()
     }
 
     func toggleMainWindow() {
@@ -7799,6 +7819,10 @@ struct codexUMain {
 
         if CommandLine.arguments.contains("--self-test-statistics-time-zone") {
             exit(StatisticsTimeZoneSelfTest.run() ? 0 : 1)
+        }
+
+        if CommandLine.arguments.contains("--self-test-maintainer") {
+            exit(MaintainerSelfTest.run() ? 0 : 1)
         }
 
         if CommandLine.arguments.contains("--dump-json") {
