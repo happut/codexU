@@ -9,7 +9,7 @@ codexU 是一个 macOS 菜单栏与桌面应用，用来查看 OpenAI Codex / Ch
 
 ## 界面截图
 
-![codexU v1.0.2 状态栏定制与主界面](docs/screenshot-v1.0.2-status-bar-customization.png)
+![codexU v1.1.0 配色图库、设置与主界面](docs/screenshot-v1.1.0-palette-gallery.png)
 
 ![codexU 今日任务视图](docs/screenshot-v0.3.0-today.png)
 
