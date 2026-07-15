@@ -4047,7 +4047,7 @@ struct SettingsPanelView: View {
                 }
                 }
                 .padding(.horizontal, 20)
-                .padding(.top, 52)
+                .padding(.top, settingsContentTopInset)
                 .padding(.bottom, 20)
             }
         }
@@ -8178,6 +8178,7 @@ let settingsSectionDetailFontSize: CGFloat = 10
 let settingsRowTitleFontSize: CGFloat = 11.5
 let settingsRowDetailFontSize: CGFloat = 9.5
 let settingsControlFontSize: CGFloat = 11
+private let settingsContentTopInset: CGFloat = 12
 private let settingsSwitchWidth: CGFloat = 56
 private let settingsShortcutControlSpacing: CGFloat = 8
 private let settingsShortcutRecorderWidth: CGFloat = 132
