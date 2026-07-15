@@ -74,15 +74,54 @@ struct PaletteAssetFill: View {
     var body: some View {
         if let image = PaletteAssetStore.shared.image(for: descriptor) {
             switch descriptor.renderMode {
-            case .tileX, .tileY:
-                Image(nsImage: image)
-                    .resizable(resizingMode: .tile)
-                    .interpolation(.high)
+            case .tileX:
+                PaletteTiledAssetFill(image: image, axis: .horizontal)
+            case .tileY:
+                PaletteTiledAssetFill(image: image, axis: .vertical)
             case .fullRing, .fixed:
                 Image(nsImage: image)
                     .resizable()
                     .interpolation(.high)
             }
         }
+    }
+}
+
+private struct PaletteTiledAssetFill: View {
+    enum Axis {
+        case horizontal
+        case vertical
+    }
+
+    let image: NSImage
+    let axis: Axis
+
+    var body: some View {
+        Canvas(opaque: false, rendersAsynchronously: false) { context, size in
+            guard image.size.width > 0, image.size.height > 0, size.width > 0, size.height > 0 else { return }
+            let resolved = context.resolve(Image(nsImage: image))
+
+            switch axis {
+            case .horizontal:
+                // Scale the complete SVG strip to the target height first, then
+                // repeat it. SwiftUI's .tile keeps the 32pt source height and a
+                // 10pt progress bar therefore exposes only a cropped edge.
+                let tileWidth = max(1, size.height * image.size.width / image.size.height)
+                var x: CGFloat = 0
+                while x < size.width {
+                    context.draw(resolved, in: CGRect(x: x, y: 0, width: tileWidth, height: size.height))
+                    x += tileWidth
+                }
+            case .vertical:
+                let tileHeight = max(1, size.width * image.size.height / image.size.width)
+                var y: CGFloat = 0
+                while y < size.height {
+                    context.draw(resolved, in: CGRect(x: 0, y: y, width: size.width, height: tileHeight))
+                    y += tileHeight
+                }
+            }
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 }
