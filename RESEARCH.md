@@ -37,7 +37,7 @@ The generated schema for the installed Codex 0.144.2 runtime includes:
 - `GetAccountTokenUsageResponse`
 - `AccountTokenUsageSummary`
 
-`account/rateLimits/read` returns rolling windows as percentages, not absolute token quota numbers. The response uses nullable `primary` and `secondary` transport slots. Those slot names do not define a fixed 5-hour or 7-day meaning; clients must classify each returned window by `windowDurationMins`.
+`account/rateLimits/read` returns rolling windows as percentages, not absolute token quota numbers. The response uses nullable `primary` and `secondary` transport slots. Those slot names do not define a fixed 5-hour or 7-day meaning; clients must classify each returned window by `windowDurationMins`. Known durations today: 300 (5h), 10080 (7d), and calendar-month style windows in the 28–31 day range (for example Team accounts returning 43800 minutes). The long-period secondary display slot prefers 7d when present, otherwise monthly.
 
 Observed response combinations on this machine include:
 
