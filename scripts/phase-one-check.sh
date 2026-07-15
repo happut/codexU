@@ -31,7 +31,7 @@ run_check phase-one-gate "$BIN" --self-test-phase-one-gate
 run_check rate-limits "$BIN" --self-test-rate-limits
 run_check statistics-time-zone "$BIN" --self-test-statistics-time-zone
 run_check status-item "$BIN" --self-test-status-item
-run_check parsers "$ROOT_DIR/scripts/test-parsers.sh"
+run_check parsers env CODEXU_SKIP_BUILD=1 "$ROOT_DIR/scripts/test-parsers.sh"
 run_check palettes "$BIN" --self-test-palettes
 run_check particle-animation "$BIN" --self-test-particle-animation
 run_check macos-compatibility "$ROOT_DIR/scripts/test-macos-compatibility.sh"
