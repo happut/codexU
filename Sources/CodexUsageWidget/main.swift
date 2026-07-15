@@ -18,6 +18,39 @@ struct CreditsInfo: Equatable {
     let unlimited: Bool
     let balance: String?
     let resetCredits: Int?
+    let resetCreditDetails: [ResetCreditDetail]?
+}
+
+struct ResetCreditDetail: Identifiable, Equatable {
+    let id: String
+    let expiresAt: Date?
+}
+
+struct ResetCreditDisclosure: Equatable {
+    static let inlineDetailLimit = 2
+
+    let totalCount: Int
+    let details: [ResetCreditDetail]
+
+    var fullDetails: [ResetCreditDetail] {
+        Array(details.prefix(max(0, totalCount)))
+    }
+
+    var inlineDetails: [ResetCreditDetail] {
+        Array(fullDetails.prefix(Self.inlineDetailLimit))
+    }
+
+    var hiddenCount: Int {
+        max(0, totalCount - inlineDetails.count)
+    }
+
+    var missingDetailCount: Int {
+        max(0, totalCount - fullDetails.count)
+    }
+
+    var showsExpandedTooltip: Bool {
+        totalCount > Self.inlineDetailLimit
+    }
 }
 
 struct AccountInfo: Equatable {
@@ -302,6 +335,7 @@ struct UsageSnapshot: Equatable {
     func replacingQuotaWindows(
         fiveHourQuota: RateWindow?,
         sevenDayQuota: RateWindow?,
+        credits: CreditsInfo?,
         quotaReadSucceeded: Bool
     ) -> UsageSnapshot {
         UsageSnapshot(
@@ -1194,8 +1228,27 @@ final class CodexUsageReader {
         snapshot.rateLimitDiagnostics = diagnostics
 
         var resetCredits: Int?
+        var resetCreditDetails: [ResetCreditDetail]?
         if let reset = result["rateLimitResetCredits"] as? [String: Any] {
-            resetCredits = intValue(reset["availableCount"])
+            resetCredits = CodexResetCreditNormalizer.normalizeAvailableCount(
+                intValue(reset["availableCount"])
+            )
+            if let rawDetails = reset["credits"] as? [[String: Any]] {
+                resetCreditDetails = rawDetails
+                    .compactMap(parseResetCreditDetail)
+                    .sorted { lhs, rhs in
+                        switch (lhs.expiresAt, rhs.expiresAt) {
+                        case let (left?, right?):
+                            return left == right ? lhs.id < rhs.id : left < right
+                        case (.some, .none):
+                            return true
+                        case (.none, .some):
+                            return false
+                        case (.none, .none):
+                            return lhs.id < rhs.id
+                        }
+                    }
+            }
         }
 
         if let credits = limits["credits"] as? [String: Any] {
@@ -1203,11 +1256,28 @@ final class CodexUsageReader {
                 hasCredits: credits["hasCredits"] as? Bool ?? false,
                 unlimited: credits["unlimited"] as? Bool ?? false,
                 balance: stringValue(credits["balance"]),
-                resetCredits: resetCredits
+                resetCredits: resetCredits,
+                resetCreditDetails: resetCreditDetails
             )
         } else if resetCredits != nil {
-            snapshot.credits = CreditsInfo(hasCredits: false, unlimited: false, balance: nil, resetCredits: resetCredits)
+            snapshot.credits = CreditsInfo(
+                hasCredits: false,
+                unlimited: false,
+                balance: nil,
+                resetCredits: resetCredits,
+                resetCreditDetails: resetCreditDetails
+            )
         }
+    }
+
+    private func parseResetCreditDetail(_ object: [String: Any]) -> ResetCreditDetail? {
+        guard let id = object["id"] as? String,
+              object["status"] as? String == "available"
+        else { return nil }
+
+        let expiresAt = doubleValue(object["expiresAt"])
+            .map(Date.init(timeIntervalSince1970:))
+        return ResetCreditDetail(id: id, expiresAt: expiresAt)
     }
 
     private func parseRateWindow(_ value: Any?) -> RateWindow? {
@@ -3399,6 +3469,15 @@ struct UsageWidgetView: View {
                     language: language
                 )
                 .frame(width: 154, height: 26)
+
+                if let resetCredits = snapshot.credits?.resetCredits, resetCredits >= 1 {
+                    ResetCreditAvailability(
+                        count: resetCredits,
+                        details: snapshot.credits?.resetCreditDetails,
+                        language: language
+                    )
+                    .frame(width: 154)
+                }
             }
 
             VStack(alignment: .leading, spacing: 13) {
@@ -6160,6 +6239,126 @@ struct QuotaResetLine: View {
     }
 }
 
+private struct ResetCreditAvailability: View {
+    let count: Int
+    let details: [ResetCreditDetail]?
+    let language: WidgetLanguage
+    @Environment(\.visualTokens) private var visualTokens
+    @State private var isHovering = false
+
+    private var disclosure: ResetCreditDisclosure {
+        ResetCreditDisclosure(totalCount: count, details: details ?? [])
+    }
+
+    var body: some View {
+        VStack(spacing: 4) {
+            HStack(spacing: 5) {
+                Image(systemName: "arrow.counterclockwise.circle.fill")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(visualTokens.accent.primary.color)
+                Text(language.text("可用重置次数", "Available resets"))
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 4)
+                Text("\(count)")
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(.primary)
+            }
+
+            ForEach(Array(disclosure.inlineDetails.enumerated()), id: \.element.id) { index, detail in
+                HStack(spacing: 5) {
+                    Text(language.text("第 \(index + 1) 次", "Reset \(index + 1)"))
+                        .font(.system(size: 8.5, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 4)
+                    Text(expirationText(detail.expiresAt))
+                        .font(.system(size: 8.5, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+
+            if disclosure.showsExpandedTooltip {
+                HStack(spacing: 4) {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 8, weight: .semibold))
+                    Text(expandedTooltipHint)
+                }
+                    .font(.system(size: 8.2, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else if disclosure.missingDetailCount > 0 {
+                Text(language.text(
+                    "另有 \(disclosure.missingDetailCount) 次未提供到期时间",
+                    "\(disclosure.missingDetailCount) expiry times unavailable"
+                ))
+                    .font(.system(size: 8.2, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .contentShape(Rectangle())
+        .onHover { isHovering = $0 }
+        .overlay(alignment: .topLeading) {
+            if isHovering, disclosure.showsExpandedTooltip {
+                ChartTooltipView(payload: tooltipPayload)
+                    .frame(width: chartTooltipWidth)
+                    .offset(x: 160, y: -4)
+                    .transition(.opacity.combined(with: .scale(scale: 0.98)))
+                    .zIndex(20)
+            }
+        }
+        .zIndex(isHovering ? 20 : 0)
+        .accessibilityElement(children: .combine)
+    }
+
+    private var tooltipPayload: ChartTooltipPayload {
+        var rows = disclosure.fullDetails.enumerated().map { index, detail in
+            ChartTooltipRow(
+                id: detail.id,
+                label: language.text("第 \(index + 1) 次", "Reset \(index + 1)"),
+                value: expirationText(detail.expiresAt)
+            )
+        }
+        if disclosure.missingDetailCount > 0 {
+            rows.append(ChartTooltipRow(
+                id: "missing-expiry-details",
+                label: language.text("其余 \(disclosure.missingDetailCount) 次", "Other \(disclosure.missingDetailCount)"),
+                value: language.text("未提供到期时间", "Expiry unavailable")
+            ))
+        }
+        return ChartTooltipPayload(
+            title: language.text("可用重置次数 \(count)", "\(count) available resets"),
+            rows: rows
+        )
+    }
+
+    private var expandedTooltipHint: String {
+        if disclosure.inlineDetails.isEmpty {
+            return language.text(
+                "\(disclosure.hiddenCount) 次 · 悬停查看",
+                "\(disclosure.hiddenCount) resets · hover"
+            )
+        }
+        return language.text(
+            "其余 \(disclosure.hiddenCount) 次 · 悬停查看",
+            "\(disclosure.hiddenCount) more · hover"
+        )
+    }
+
+    private func expirationText(_ date: Date?) -> String {
+        guard let date else {
+            return language.text("未提供到期时间", "Expiry unavailable")
+        }
+        let value = resetDateTime(date, language: language)
+        return language.text("\(value) 到期", "Expires \(value)")
+    }
+}
+
 struct DailyTokenChart: View {
     let buckets: [DailyTokenBucket]
     let language: WidgetLanguage
@@ -8750,7 +8949,12 @@ private func dumpJSON(_ snapshot: UsageSnapshot) {
             "hasCredits": credits.hasCredits,
             "unlimited": credits.unlimited,
             "balance": jsonValue(credits.balance),
-            "resetCredits": jsonValue(credits.resetCredits)
+            "resetCredits": jsonValue(credits.resetCredits),
+            "resetCreditDetails": credits.resetCreditDetails.map { details in
+                details.map { detail in
+                    ["expiresAt": jsonValue(isoString(detail.expiresAt))]
+                }
+            } ?? NSNull()
         ] as [String: Any]
     }
 
