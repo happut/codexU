@@ -21,9 +21,18 @@ enum PaletteCatalogSelfTest {
         let catalog = PaletteCatalog.load(rootURL: root, appVersion: "1.0.5", includeExperimental: true)
         let elapsed = CFAbsoluteTimeGetCurrent() - start
 
-        expect(catalog.contains(PaletteCatalog.defaultPaletteID), "default palette should load")
-        expect(catalog.contains("codexu.blue-white-porcelain"), "blue-and-white porcelain palette should load")
-        expect(catalog.descriptors(language: "zh-Hans").count == 2, "two built-in palettes should be discoverable")
+        let builtInPaletteIDs = [
+            PaletteCatalog.defaultPaletteID,
+            "codexu.blue-white-porcelain",
+            "codexu.forbidden-city-red",
+            "codexu.thousand-li-landscape",
+            "codexu.dunhuang-apsara",
+            "codexu.orchid-dawn"
+        ]
+        for paletteID in builtInPaletteIDs {
+            expect(catalog.contains(paletteID), "\(paletteID) should load")
+        }
+        expect(catalog.descriptors(language: "zh-Hans").count == builtInPaletteIDs.count, "all six built-in palettes should be discoverable")
         expect(elapsed < 0.5, "palette catalog should load in under 500ms during self-test")
 
         let defaultLight = catalog.resolve(id: PaletteCatalog.defaultPaletteID, appearance: .light)
@@ -55,6 +64,16 @@ enum PaletteCatalogSelfTest {
             }
         }
 
+        for paletteID in builtInPaletteIDs where paletteID != PaletteCatalog.defaultPaletteID && paletteID != "codexu.blue-white-porcelain" {
+            for appearance in PaletteAppearance.allCases {
+                let tokens = catalog.resolve(id: paletteID, appearance: appearance)
+                expect(tokens.identity.paletteID == paletteID, "\(paletteID) should preserve its resolved identity")
+                expect(tokens.identity.appearance == appearance, "\(paletteID) should resolve both appearances")
+                expect(tokens.assets.isEmpty, "\(paletteID) should remain color-token-only in this phase")
+                expect(tokens.data.series.count == 3 && tokens.data.valueProgress.count == 3, "\(paletteID) should expose complete data roles")
+            }
+        }
+
         let unknown = catalog.resolve(id: "community.missing", appearance: .dark)
         expect(unknown.identity.paletteID == PaletteCatalog.defaultPaletteID, "unknown IDs should resolve to default")
 
@@ -67,6 +86,8 @@ enum PaletteCatalogSelfTest {
             expect(normalized.paletteFallbackNotice != nil, "invalid stored ID should expose a fallback notice")
             expect(normalized.selectPalette("codexu.blue-white-porcelain") == .selected, "valid selection should succeed")
             expect(defaults.string(forKey: "codexU.paletteID") == "codexu.blue-white-porcelain", "selection should persist")
+            expect(normalized.selectPalette("codexu.thousand-li-landscape") == .selected, "new token palette selection should succeed")
+            expect(defaults.string(forKey: "codexU.paletteID") == "codexu.thousand-li-landscape", "new token palette selection should persist")
             normalized.resetPalette()
             expect(normalized.paletteID == PaletteCatalog.defaultPaletteID, "reset should select default")
         } else {

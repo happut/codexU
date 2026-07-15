@@ -274,7 +274,7 @@ enum StatusItemPresentationSelfTest {
         expect(aquaImage.size == classic.imageSize, "Aqua render should preserve presentation size")
         expect(darkImage.size == classic.imageSize, "Dark Aqua render should preserve presentation size")
         let paletteCatalog = PaletteCatalog.loadFromMainBundle()
-        for paletteID in [PaletteCatalog.defaultPaletteID, "codexu.blue-white-porcelain"] {
+        for paletteID in paletteCatalog.paletteIDs {
             for paletteAppearance in PaletteAppearance.allCases {
                 let tokens = paletteCatalog.resolve(id: paletteID, appearance: paletteAppearance)
                 let appearance = NSAppearance(named: paletteAppearance == .dark ? .darkAqua : .aqua)
