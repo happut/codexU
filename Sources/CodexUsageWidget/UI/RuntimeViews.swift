@@ -277,9 +277,12 @@ struct RuntimeSummaryCard: View {
             ))
         }
         if let value = summary.sevenDayRemainingPercent {
+            let secondaryTitle = summary.secondaryQuotaIsMonthly
+                ? language.text("月剩余", "mo left")
+                : language.text("7日剩余", "7d left")
             items.append(RuntimeQuotaSummaryItem(
                 id: "seven-day",
-                title: language.text("7日剩余", "7d left"),
+                title: secondaryTitle,
                 value: value,
                 resetsAt: summary.sevenDayResetsAt
             ))
