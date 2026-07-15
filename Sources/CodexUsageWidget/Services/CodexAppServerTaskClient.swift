@@ -32,6 +32,7 @@ final class CodexAppServerTaskClient: CodexTaskEventClient {
     private var activeReasons: Set<TaskConnectionReason> = []
     private var nextRequestID: Int64 = 100
     private var pendingThreadListIDs: Set<Int64> = []
+    private var pendingThreadListSpans: [Int64: PerformanceSpan] = [:]
     private var initializeTimeout: DispatchWorkItem?
     private var isStopping = false
 
@@ -122,6 +123,7 @@ final class CodexAppServerTaskClient: CodexTaskEventClient {
         isStopping = false
         outputBuffer.removeAll(keepingCapacity: true)
         pendingThreadListIDs.removeAll()
+        pendingThreadListSpans.removeAll()
         connectionMode = mode
 
         let process = Process()
@@ -236,8 +238,16 @@ final class CodexAppServerTaskClient: CodexTaskEventClient {
         guard pendingThreadListIDs.remove(responseID) != nil,
               let result = object["result"] as? [String: Any],
               let threads = result["data"] as? [[String: Any]]
-        else { return }
+        else {
+            if let span = pendingThreadListSpans.removeValue(forKey: responseID) {
+                PerformanceMonitor.shared.end(span, success: false)
+            }
+            return
+        }
 
+        if let span = pendingThreadListSpans.removeValue(forKey: responseID) {
+            PerformanceMonitor.shared.end(span)
+        }
         reducer.replaceThreads(threads, connectionMode: connectionMode)
         publishSnapshot()
     }
@@ -247,6 +257,7 @@ final class CodexAppServerTaskClient: CodexTaskEventClient {
         let requestID = nextRequestID
         nextRequestID &+= 1
         pendingThreadListIDs.insert(requestID)
+        pendingThreadListSpans[requestID] = PerformanceMonitor.shared.begin(.appServerTasks)
         let wrote = writeJSONObject([
             "id": requestID,
             "method": "thread/list",
@@ -260,6 +271,9 @@ final class CodexAppServerTaskClient: CodexTaskEventClient {
         ])
         if !wrote {
             pendingThreadListIDs.remove(requestID)
+            if let span = pendingThreadListSpans.removeValue(forKey: requestID) {
+                PerformanceMonitor.shared.end(span, success: false)
+            }
             handleDisconnect()
         }
     }
@@ -295,6 +309,10 @@ final class CodexAppServerTaskClient: CodexTaskEventClient {
         process = nil
         outputBuffer.removeAll(keepingCapacity: false)
         pendingThreadListIDs.removeAll()
+        for span in pendingThreadListSpans.values {
+            PerformanceMonitor.shared.end(span, success: false)
+        }
+        pendingThreadListSpans.removeAll()
         connectionMode = .disconnected
         reducer.disconnect()
         publishSnapshot()

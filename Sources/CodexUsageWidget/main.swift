@@ -612,6 +612,7 @@ final class UsageStore: ObservableObject {
 
     private var fullTimer: Timer?
     private var taskBoardTimer: Timer?
+    private var performanceSampleTimer: Timer?
     private var statisticsRolloverTimer: Timer?
     private var systemTimeZoneObserver: NSObjectProtocol?
     private var powerStateObserver: NSObjectProtocol?
@@ -689,6 +690,12 @@ final class UsageStore: ObservableObject {
         scheduleFullRefreshTimer()
         updateTaskBoardPollingState(refreshImmediately: false)
         updateCodexTaskConnection()
+        PerformanceMonitor.shared.recordResourceSample(windowVisible: isMainWindowActive)
+        performanceSampleTimer = Timer.scheduledTimer(withTimeInterval: 15 * 60, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            PerformanceMonitor.shared.recordResourceSample(windowVisible: self.isMainWindowActive)
+        }
+        performanceSampleTimer?.tolerance = 90
     }
 
     func stop() {
@@ -697,6 +704,7 @@ final class UsageStore: ObservableObject {
         taskBoardTimer?.invalidate()
         statisticsRolloverTimer?.invalidate()
         statisticsFeedbackTimer?.invalidate()
+        performanceSampleTimer?.invalidate()
         if let systemTimeZoneObserver {
             NotificationCenter.default.removeObserver(systemTimeZoneObserver)
             self.systemTimeZoneObserver = nil
@@ -711,6 +719,7 @@ final class UsageStore: ObservableObject {
         }
         visualEnergyMode = .suspended
         codexTaskClient.stop()
+        PerformanceMonitor.shared.flush()
     }
 
     func refresh(queueIfBusy: Bool = false) {
@@ -724,6 +733,7 @@ final class UsageStore: ObservableObject {
         let generation = refreshGeneration
         let preference = statisticsPreference
         isRefreshing = true
+        let performanceSpan = PerformanceMonitor.shared.begin(.fullRefresh)
 
         DispatchQueue.global(qos: .utility).async {
             let multiSnapshot = MultiRuntimeUsageReader().load(
@@ -740,6 +750,7 @@ final class UsageStore: ObservableObject {
                     }
                 }
                 self.isRefreshing = false
+                PerformanceMonitor.shared.end(performanceSpan)
                 self.lastFullRefreshCompletedAt = Date()
                 self.scheduleFullRefreshTimer()
                 if self.hasPendingRefresh {
@@ -1010,6 +1021,7 @@ final class UsageStore: ObservableObject {
     private func refreshTaskBoard() {
         guard !isRefreshing, !isRefreshingTaskBoard else { return }
         isRefreshingTaskBoard = true
+        let performanceSpan = PerformanceMonitor.shared.begin(.taskRefresh)
         let scope = selectedRuntimeScope
         let preference = statisticsPreference
         if scope == .codex {
@@ -1024,6 +1036,7 @@ final class UsageStore: ObservableObject {
             DispatchQueue.main.async {
                 self.applyTaskBoard(taskBoard, for: scope)
                 self.isRefreshingTaskBoard = false
+                PerformanceMonitor.shared.end(performanceSpan, success: taskBoard != nil)
                 if self.hasPendingRefresh {
                     self.hasPendingRefresh = false
                     self.refresh()
@@ -1033,6 +1046,8 @@ final class UsageStore: ObservableObject {
     }
 
     private func apply(_ multiSnapshot: MultiRuntimeUsageSnapshot) {
+        let performanceSpan = PerformanceMonitor.shared.begin(.statePublish)
+        defer { PerformanceMonitor.shared.end(performanceSpan) }
         let reconciledRuntimes = RuntimeQuotaContinuity.reconcile(
             previous: runtimeSnapshots,
             incoming: multiSnapshot.runtimes
@@ -1155,6 +1170,8 @@ final class CodexUsageReader {
     }
 
     private func readAppServer(messages: inout [String]) -> AppServerSnapshot {
+        let performanceSpan = PerformanceMonitor.shared.begin(.appServerQuota)
+        defer { PerformanceMonitor.shared.end(performanceSpan) }
         guard let codexPath = resolveCodexExecutablePath() else {
             messages.append("未找到 codex 可执行文件")
             return AppServerSnapshot()
@@ -2552,6 +2569,7 @@ final class CodexUsageReader {
     }
 
     private func runSQLiteJSON(sqlitePath: String, dbPath: String, query: String) -> [[String: Any]] {
+        let performanceSpan = PerformanceMonitor.shared.begin(.sqliteRead)
         let process = Process()
         process.executableURL = URL(fileURLWithPath: sqlitePath)
         process.arguments = ["-readonly", "-json", dbPath, query]
@@ -2564,6 +2582,7 @@ final class CodexUsageReader {
         do {
             try process.run()
         } catch {
+            PerformanceMonitor.shared.end(performanceSpan, success: false)
             return []
         }
 
@@ -2573,8 +2592,12 @@ final class CodexUsageReader {
         guard
             process.terminationStatus == 0,
             let json = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]
-        else { return [] }
+        else {
+            PerformanceMonitor.shared.end(performanceSpan, success: false)
+            return []
+        }
 
+        PerformanceMonitor.shared.end(performanceSpan)
         return json
     }
 
@@ -9529,6 +9552,7 @@ final class MainAppWindow: NSWindow {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPopoverDelegate {
+    private let startupPerformanceSpan = PerformanceMonitor.shared.begin(.appStartup)
     private let store = UsageStore()
     private let paletteCatalog = PaletteCatalog.loadFromMainBundle()
     private lazy var settings = AppSettings(paletteCatalog: paletteCatalog)
@@ -9586,6 +9610,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         store.updateVisibleRuntimeScopes(settings.visibleRuntimeScopes)
         store.start()
         updateStore.startAutomaticCheck()
+        PerformanceMonitor.shared.end(startupPerformanceSpan)
     }
 
     private func createMainWindow() {
@@ -10222,6 +10247,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         lastRenderedStatusItemAppearanceName = appearance.name
         lastRenderedStatusItemPaletteIdentity = visualTokens.identity
 
+        let performanceSpan = PerformanceMonitor.shared.begin(.statusRender)
         statusItem?.length = presentation.itemLength
         button.image = statusItemRenderer.render(
             presentation,
@@ -10231,6 +10257,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         button.toolTip = presentation.tooltip
         button.setAccessibilityLabel("codexU")
         button.setAccessibilityValue(presentation.accessibilityValue)
+        PerformanceMonitor.shared.end(performanceSpan)
     }
 
     private func selectedRuntimeSummary() -> RuntimeMenuSummary? {
@@ -10427,6 +10454,10 @@ struct codexUMain {
 
         if CommandLine.arguments.contains("--self-test-task-runtime") {
             exit(TaskRuntimeSelfTest.run() ? 0 : 1)
+        }
+
+        if CommandLine.arguments.contains("--self-test-performance-monitor") {
+            exit(PerformanceMonitorSelfTest.run() ? 0 : 1)
         }
 
         if CommandLine.arguments.contains("--dump-json") {
