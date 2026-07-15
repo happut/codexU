@@ -607,6 +607,7 @@ final class UsageStore: ObservableObject {
     @Published private(set) var statisticsTransitionMessage: String?
     @Published private(set) var isSwitchingStatisticsTimeZone = false
     @Published private(set) var visualEnergyMode: VisualEnergyMode = .suspended
+    @Published private(set) var codexLiveTasks: CodexTaskLiveSnapshot = .disconnected
 
     private var fullTimer: Timer?
     private var taskBoardTimer: Timer?
@@ -629,6 +630,14 @@ final class UsageStore: ObservableObject {
     private let taskBoardRefreshInterval: TimeInterval = 60
     private let foregroundFullRefreshInterval: TimeInterval = 5 * 60
     private let backgroundFullRefreshInterval: TimeInterval = 15 * 60
+    private let codexTaskClient: CodexTaskEventClient
+
+    init(codexTaskClient: CodexTaskEventClient = CodexAppServerTaskClient()) {
+        self.codexTaskClient = codexTaskClient
+        self.codexTaskClient.onSnapshot = { [weak self] snapshot in
+            self?.codexLiveTasks = snapshot
+        }
+    }
 
     var runtimeSummaries: [RuntimeMenuSummary] {
         RuntimeScope.allCases.compactMap { scope in
@@ -648,6 +657,7 @@ final class UsageStore: ObservableObject {
 
     func start() {
         hasStarted = true
+        codexTaskClient.start(reason: .startup)
         refresh()
         systemTimeZoneObserver = NotificationCenter.default.addObserver(
             forName: .NSSystemTimeZoneDidChange,
@@ -697,6 +707,7 @@ final class UsageStore: ObservableObject {
             self.thermalStateObserver = nil
         }
         visualEnergyMode = .suspended
+        codexTaskClient.stop()
     }
 
     func refresh(queueIfBusy: Bool = false) {
@@ -828,6 +839,7 @@ final class UsageStore: ObservableObject {
         let nextScope = visibleRuntimeScopes.contains(scope) ? scope : (visibleRuntimeScopes.first ?? scope)
         selectedRuntimeScope = nextScope
         snapshot = multiRuntimeSnapshot.displaySnapshot(for: nextScope)
+        updateCodexTaskConnection()
     }
 
     func runtimeSnapshot(for scope: RuntimeScope) -> RuntimeUsageSnapshot? {
@@ -885,6 +897,23 @@ final class UsageStore: ObservableObject {
         isTaskBoardSelected = isSelected
         guard hasStarted else { return }
         updateTaskBoardPollingState(refreshImmediately: isTaskBoardPollingEnabled)
+        updateCodexTaskConnection()
+    }
+
+    func setStatusPopoverVisible(_ isVisible: Bool) {
+        if isVisible {
+            codexTaskClient.start(reason: .popover)
+        } else if !isTaskBoardPollingEnabled {
+            codexTaskClient.stopIfIdle()
+        }
+    }
+
+    private func updateCodexTaskConnection() {
+        if isTaskBoardPollingEnabled && selectedRuntimeScope == .codex {
+            codexTaskClient.start(reason: .taskUI)
+        } else {
+            codexTaskClient.stopIfIdle()
+        }
     }
 
     private var isTaskBoardPollingEnabled: Bool {
@@ -933,6 +962,9 @@ final class UsageStore: ObservableObject {
         isRefreshingTaskBoard = true
         let scope = selectedRuntimeScope
         let preference = statisticsPreference
+        if scope == .codex {
+            codexTaskClient.refreshThreads()
+        }
 
         DispatchQueue.global(qos: .utility).async {
             let taskBoard = MultiRuntimeUsageReader().loadTaskBoard(
@@ -9669,6 +9701,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
             )
         )
         statusPopover = popover
+        store.setStatusPopoverVisible(true)
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         updateTaskBoardPollingActivity()
         configureStatusPopoverWindow()
@@ -9700,6 +9733,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         statusPopover = nil
         removeStatusPopoverEventMonitors()
         updateTaskBoardPollingActivity()
+        store.setStatusPopoverVisible(false)
     }
 
     private func closeStatusPopover() {
@@ -9707,6 +9741,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         statusPopover = nil
         removeStatusPopoverEventMonitors()
         updateTaskBoardPollingActivity()
+        store.setStatusPopoverVisible(false)
     }
 
     private func updateTaskBoardPollingActivity() {
