@@ -8404,24 +8404,11 @@ struct TaskIssueCard: View {
 
     private var cardSurface: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .top, spacing: 6) {
-                Text(item.title)
-                    .font(.system(size: 11, weight: .semibold))
-                    .lineLimit(2)
-                    .minimumScaleFactor(0.9)
-                    .frame(minHeight: 28, alignment: .topLeading)
-                Spacer(minLength: 4)
-                if canOpenSession {
-                    Image(systemName: "arrow.up.forward.app")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(
-                            isHovering
-                                ? AnyShapeStyle(visualTokens.selection.foreground.color)
-                                : AnyShapeStyle(.tertiary)
-                        )
-                        .accessibilityHidden(true)
-                }
-            }
+            Text(item.title)
+                .font(.system(size: 11, weight: .semibold))
+                .lineLimit(2)
+                .minimumScaleFactor(0.9)
+                .frame(minHeight: 28, alignment: .topLeading)
 
             HStack(spacing: 5) {
                 if !item.detail.isEmpty {
