@@ -22,6 +22,71 @@ enum TaskRuntimeSelfTest {
             "task without activity time should remain pending"
         )
         expect(
+            TaskSourceClassifier.codexThread(updatedAt: now, now: now).displayState == .recentlyActive,
+            "recent Codex activity should be presented as recently active"
+        )
+        expect(
+            TaskSourceClassifier.codexThread(updatedAt: nil, now: now).displayState == .continueLater,
+            "Codex task without activity time should be presented as continue later"
+        )
+        expect(
+            TaskSourceClassifier.claudeTask(rawStatus: "running")
+                == TaskClassification(columnKind: .active, displayState: .running),
+            "Claude running status should stay active"
+        )
+        expect(
+            TaskSourceClassifier.claudeTask(rawStatus: "error")
+                == TaskClassification(columnKind: .pending, displayState: .failed),
+            "Claude errors should remain in pending with a failed state"
+        )
+        expect(
+            TaskSourceClassifier.claudeTask(rawStatus: "blocked")
+                == TaskClassification(columnKind: .pending, displayState: .blocked),
+            "Claude blocked status should remain in pending"
+        )
+        expect(
+            TaskSourceClassifier.claudeTask(rawStatus: "new-status")
+                == TaskClassification(columnKind: .pending, displayState: .unknown),
+            "unknown Claude status should degrade explicitly"
+        )
+
+        let utcFormatter = ISO8601DateFormatter()
+        let scheduleNow = utcFormatter.date(from: "2026-12-31T23:30:00Z")!
+        let dailySchedule = TaskScheduleParser.presentation(
+            rrule: "DTSTART;TZID=Asia/Shanghai:20260101T090000\nRRULE:FREQ=DAILY;INTERVAL=1",
+            now: scheduleNow
+        )
+        expect(dailySchedule.summary == "每天 09:00", "daily schedule should include its local time")
+        expect(
+            dailySchedule.nextRunAt == utcFormatter.date(from: "2027-01-01T01:00:00Z"),
+            "daily next run should respect timezone and cross-year boundaries"
+        )
+
+        let weeklyNow = utcFormatter.date(from: "2026-07-16T02:00:00Z")!
+        let weeklySchedule = TaskScheduleParser.presentation(
+            rrule: "DTSTART;TZID=Asia/Shanghai:20260629T090000\nRRULE:FREQ=WEEKLY;BYDAY=MO,WE,FR;INTERVAL=1",
+            now: weeklyNow
+        )
+        expect(weeklySchedule.summary == "每周一三五 09:00", "weekly summary should preserve weekdays")
+        expect(
+            weeklySchedule.nextRunAt == utcFormatter.date(from: "2026-07-17T01:00:00Z"),
+            "weekly next run should select the nearest configured weekday"
+        )
+
+        let missingTimezone = TaskScheduleParser.presentation(
+            rrule: "RRULE:FREQ=WEEKLY;BYHOUR=11;BYMINUTE=0;BYDAY=MO,WE,FR",
+            now: weeklyNow
+        )
+        expect(missingTimezone.summary == "每周一三五 11:00", "verifiable cadence should survive missing timezone")
+        expect(missingTimezone.nextRunAt == nil, "missing timezone must not produce a guessed next run")
+
+        let unsupported = TaskScheduleParser.presentation(
+            rrule: "DTSTART;TZID=Asia/Shanghai:20260716T090000\nRRULE:FREQ=MINUTELY;INTERVAL=30",
+            now: weeklyNow
+        )
+        expect(unsupported.summary == "每 30 分钟", "unsupported recurrence should still have a cadence summary")
+        expect(unsupported.nextRunAt == nil, "unsupported recurrence must not produce a next run")
+        expect(
             TaskThreadVisibility.isSubagent(["threadSource": "subagent"]),
             "direct subagent source should be filtered"
         )

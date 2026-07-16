@@ -1,5 +1,261 @@
 import Foundation
 
+enum TaskSourceKind: String, Equatable {
+    case codexThread
+    case codexAutomation
+    case claudeTask
+}
+
+enum TaskDisplayState: String, Equatable {
+    case recentlyActive
+    case continueLater
+    case scheduled
+    case archived
+    case running
+    case pending
+    case failed
+    case blocked
+    case completed
+    case unknown
+}
+
+enum TaskStateBasis: String, Equatable {
+    case activityWindow
+    case archive
+    case scheduleConfig
+    case explicit
+}
+
+struct TaskClassification: Equatable {
+    let columnKind: TaskColumnKind
+    let displayState: TaskDisplayState
+}
+
+enum TaskSourceClassifier {
+    static func codexThread(updatedAt: Date?, now: Date) -> TaskClassification {
+        let kind = TaskActivityClassifier.column(updatedAt: updatedAt, now: now)
+        return TaskClassification(
+            columnKind: kind,
+            displayState: kind == .active ? .recentlyActive : .continueLater
+        )
+    }
+
+    static func claudeTask(rawStatus: String?) -> TaskClassification {
+        switch rawStatus?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "in_progress", "active", "running":
+            return TaskClassification(columnKind: .active, displayState: .running)
+        case "pending":
+            return TaskClassification(columnKind: .pending, displayState: .pending)
+        case "failed", "error":
+            return TaskClassification(columnKind: .pending, displayState: .failed)
+        case "blocked":
+            return TaskClassification(columnKind: .pending, displayState: .blocked)
+        case "scheduled":
+            return TaskClassification(columnKind: .scheduled, displayState: .scheduled)
+        case "completed", "done", "success":
+            return TaskClassification(columnKind: .done, displayState: .completed)
+        default:
+            return TaskClassification(columnKind: .pending, displayState: .unknown)
+        }
+    }
+}
+
+struct TaskSchedulePresentation: Equatable {
+    let summary: String
+    let nextRunAt: Date?
+}
+
+enum TaskScheduleParser {
+    static func presentation(rrule: String?, now: Date) -> TaskSchedulePresentation {
+        guard let rrule = rrule?.trimmingCharacters(in: .whitespacesAndNewlines), !rrule.isEmpty else {
+            return TaskSchedulePresentation(summary: "", nextRunAt: nil)
+        }
+
+        let parsed = ParsedRule(rrule)
+        return TaskSchedulePresentation(
+            summary: parsed.summary,
+            nextRunAt: parsed.nextRunAt(after: now)
+        )
+    }
+
+    private struct ParsedRule {
+        let fields: [String: String]
+        let timeZone: TimeZone?
+        let startDate: Date?
+        let hour: Int?
+        let minute: Int?
+        let weekdays: [Int]
+
+        init(_ rawRule: String) {
+            let lines = rawRule
+                .split(whereSeparator: \.isNewline)
+                .map(String.init)
+            let startLine = lines.first { $0.uppercased().hasPrefix("DTSTART") }
+            let ruleLine = lines.first { $0.uppercased().hasPrefix("RRULE:") }
+                ?? lines.first { $0.uppercased().contains("FREQ=") }
+                ?? rawRule
+            let ruleBody = ruleLine.uppercased().hasPrefix("RRULE:")
+                ? String(ruleLine.dropFirst("RRULE:".count))
+                : ruleLine
+
+            var parsedFields: [String: String] = [:]
+            for component in ruleBody.split(separator: ";") {
+                let pair = component.split(separator: "=", maxSplits: 1).map(String.init)
+                guard pair.count == 2 else { continue }
+                parsedFields[pair[0].uppercased()] = pair[1].uppercased()
+            }
+            fields = parsedFields
+
+            let startParts = Self.parseStartLine(startLine)
+            timeZone = startParts.timeZone
+            startDate = startParts.date
+
+            let explicitHour = parsedFields["BYHOUR"].flatMap(Int.init)
+            let explicitMinute = parsedFields["BYMINUTE"].flatMap(Int.init)
+            if explicitHour != nil, explicitMinute != nil {
+                hour = explicitHour
+                minute = explicitMinute
+            } else if let startDate, let timeZone {
+                var calendar = Calendar(identifier: .gregorian)
+                calendar.timeZone = timeZone
+                let components = calendar.dateComponents([.hour, .minute], from: startDate)
+                hour = components.hour
+                minute = components.minute
+            } else {
+                hour = nil
+                minute = nil
+            }
+
+            weekdays = (parsedFields["BYDAY"] ?? "")
+                .split(separator: ",")
+                .compactMap { Self.weekdayNumber(String($0)) }
+        }
+
+        var summary: String {
+            let frequency = fields["FREQ"] ?? ""
+            let interval = fields["INTERVAL"].flatMap(Int.init) ?? 1
+            let time = hour.flatMap { hour in
+                minute.map { String(format: "%02d:%02d", hour, $0) }
+            }
+
+            switch frequency {
+            case "DAILY":
+                return ["每天", time].compactMap { $0 }.joined(separator: " ")
+            case "WEEKLY":
+                let dayText: String
+                if weekdays == [2, 3, 4, 5, 6] {
+                    dayText = "工作日"
+                } else if weekdays.isEmpty {
+                    dayText = "每周"
+                } else {
+                    dayText = "每周" + weekdays.compactMap(Self.chineseWeekday).joined()
+                }
+                return [dayText, time].compactMap { $0 }.joined(separator: " ")
+            case "HOURLY":
+                return interval == 1 ? "每小时" : "每 \(interval) 小时"
+            case "MINUTELY":
+                return interval == 1 ? "每分钟" : "每 \(interval) 分钟"
+            default:
+                return time ?? "定时"
+            }
+        }
+
+        func nextRunAt(after now: Date) -> Date? {
+            guard fields["INTERVAL"].flatMap(Int.init) ?? 1 == 1,
+                  let timeZone,
+                  let hour,
+                  let minute,
+                  (0...23).contains(hour),
+                  (0...59).contains(minute)
+            else { return nil }
+
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = timeZone
+            let lowerBound = startDate.map { max(now, $0.addingTimeInterval(-1)) } ?? now
+
+            switch fields["FREQ"] {
+            case "DAILY":
+                return calendar.nextDate(
+                    after: lowerBound,
+                    matching: DateComponents(hour: hour, minute: minute, second: 0),
+                    matchingPolicy: .nextTime,
+                    direction: .forward
+                )
+            case "WEEKLY":
+                let effectiveWeekdays: [Int]
+                if !weekdays.isEmpty {
+                    effectiveWeekdays = weekdays
+                } else if let startDate {
+                    effectiveWeekdays = [calendar.component(.weekday, from: startDate)]
+                } else {
+                    return nil
+                }
+                return effectiveWeekdays.compactMap { weekday in
+                    var components = DateComponents()
+                    components.weekday = weekday
+                    components.hour = hour
+                    components.minute = minute
+                    components.second = 0
+                    return calendar.nextDate(
+                        after: lowerBound,
+                        matching: components,
+                        matchingPolicy: .nextTime,
+                        direction: .forward
+                    )
+                }.min()
+            default:
+                return nil
+            }
+        }
+
+        private static func parseStartLine(_ line: String?) -> (timeZone: TimeZone?, date: Date?) {
+            guard let line,
+                  let separator = line.lastIndex(of: ":")
+            else { return (nil, nil) }
+            let prefix = String(line[..<separator])
+            let value = String(line[line.index(after: separator)...])
+            guard let zoneRange = prefix.range(of: "TZID=", options: .caseInsensitive) else {
+                return (nil, nil)
+            }
+            let identifier = String(prefix[zoneRange.upperBound...])
+            guard let timeZone = TimeZone(identifier: identifier) else { return (nil, nil) }
+
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.calendar = Calendar(identifier: .gregorian)
+            formatter.timeZone = timeZone
+            formatter.dateFormat = value.count == 13 ? "yyyyMMdd'T'HHmm" : "yyyyMMdd'T'HHmmss"
+            return (timeZone, formatter.date(from: value))
+        }
+
+        private static func weekdayNumber(_ value: String) -> Int? {
+            switch value.uppercased() {
+            case "SU": return 1
+            case "MO": return 2
+            case "TU": return 3
+            case "WE": return 4
+            case "TH": return 5
+            case "FR": return 6
+            case "SA": return 7
+            default: return nil
+            }
+        }
+
+        private static func chineseWeekday(_ value: Int) -> String? {
+            switch value {
+            case 1: return "日"
+            case 2: return "一"
+            case 3: return "二"
+            case 4: return "三"
+            case 5: return "四"
+            case 6: return "五"
+            case 7: return "六"
+            default: return nil
+            }
+        }
+    }
+}
+
 enum TaskRuntimeState: String, Equatable {
     case recorded
     case idle
