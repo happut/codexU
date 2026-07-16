@@ -34,6 +34,11 @@ enum StatusItemPresentationSelfTest {
         expect(!QuotaDisplayMode.remaining.drawsClockwise, "remaining quota should draw counterclockwise")
         expect(QuotaDisplayMode.used.startsAtLeadingEdge, "used linear bar should start at the leading edge")
         expect(!QuotaDisplayMode.remaining.startsAtLeadingEdge, "remaining linear bar should start at the trailing edge")
+        expect(AgentActivityPhase.codexHookEvent("PreToolUse") == .running, "PreToolUse should activate yellow")
+        expect(AgentActivityPhase.codexHookEvent("PermissionRequest") == .requiresInput, "PermissionRequest should activate red")
+        expect(AgentActivityPhase.codexHookEvent("TaskCompleted") == .completed, "TaskCompleted should activate green")
+        expect(AgentActivityPhase.codexHookEvent("Stop") == .completed, "current Codex Stop should activate green")
+        expect(AgentActivityPhase.codexHookEvent("PostToolUse") == nil, "PostToolUse should not change the traffic light")
 
         defaults.set(
             [StatusItemMetric.fiveHourQuota.rawValue, StatusItemMetric.sevenDayQuota.rawValue],
@@ -301,7 +306,10 @@ enum StatusItemPresentationSelfTest {
         var minimalPreferences = StatusItemPreferences.default
         minimalPreferences.displayMode = .minimal
         let minimal = builder.build(source: source, preferences: minimalPreferences, language: .en, now: now)
-        expect(minimal.itemLength <= 36, "minimal double-ring item should stay within 36pt")
+        expect(
+            minimal.itemLength - StatusItemLayoutMetrics.activityAccessoryWidth <= 36,
+            "minimal double-ring content should stay within 36pt before the activity accessory"
+        )
         let minimalOuterRingRect = StatusItemLayoutMetrics.minimalOuterRingRect
         let minimalInnerRingRect = StatusItemLayoutMetrics.minimalInnerRingRect
         expect(
@@ -321,9 +329,14 @@ enum StatusItemPresentationSelfTest {
         let lightTokens = ResolvedVisualTokens.safeDefault(.light)
         let darkTokens = ResolvedVisualTokens.safeDefault(.dark)
         let minimalImage = renderer.render(minimal, tokens: lightTokens, appearance: NSAppearance(named: .aqua))
-        if let bitmap = minimalImage.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:)),
-           let center = bitmap.colorAt(x: bitmap.pixelsWide / 2, y: bitmap.pixelsHigh / 2) {
-            expect(center.alphaComponent < 0.01, "minimal mode center should remain transparent without a runtime logo")
+        if let bitmap = minimalImage.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:)) {
+            let scaleX = CGFloat(bitmap.pixelsWide) / minimalImage.size.width
+            let scaleY = CGFloat(bitmap.pixelsHigh) / minimalImage.size.height
+            let centerAlpha = bitmap.colorAt(
+                x: Int((minimalOuterRingRect.midX * scaleX).rounded(.down)),
+                y: Int((minimalOuterRingRect.midY * scaleY).rounded(.down))
+            )?.alphaComponent ?? 0
+            expect(centerAlpha < 0.01, "minimal mode center should remain transparent without a runtime logo")
         } else {
             failures.append("minimal status item render should produce a readable bitmap")
         }
@@ -356,7 +369,10 @@ enum StatusItemPresentationSelfTest {
         var classicPreferences = StatusItemPreferences.default
         classicPreferences.displayMode = .classic
         let classic = builder.build(source: source, preferences: classicPreferences, language: .en, now: now)
-        expect(classic.itemLength <= 88, "classic double-ring item should stay within 88pt")
+        expect(
+            classic.itemLength - StatusItemLayoutMetrics.activityAccessoryWidth <= 88,
+            "classic double-ring content should stay within 88pt before the activity accessory"
+        )
         expect(classic.mode == .classic, "classic presentation should select the number-ring renderer")
         let aquaImage = renderer.render(classic, tokens: lightTokens, appearance: NSAppearance(named: .aqua))
         let darkImage = renderer.render(classic, tokens: darkTokens, appearance: NSAppearance(named: .darkAqua))
@@ -390,10 +406,16 @@ enum StatusItemPresentationSelfTest {
             singleClassic.itemLength + StatusItemLayoutMetrics.classicQuotaUnitWidth == classic.itemLength,
             "classic mode should release exactly one quota slot for 7d-only data"
         )
-        expect(singleClassic.itemLength == 55, "classic single-quota item should use the compact 55pt width")
+        expect(
+            singleClassic.itemLength == 55 + StatusItemLayoutMetrics.activityAccessoryWidth,
+            "classic single-quota item should preserve its compact content width plus the activity accessory"
+        )
 
         let rich = builder.build(source: source, preferences: .default, language: .en, now: now)
-        expect(rich.itemLength <= 134, "default rich item should stay compact after adding reset semantics")
+        expect(
+            rich.itemLength - StatusItemLayoutMetrics.activityAccessoryWidth <= 134,
+            "default rich content should stay compact before the activity accessory"
+        )
         expect(rich.quotaMetrics.count == 2, "rich mode should keep two rows when both quotas exist")
 
         let singleRich = builder.build(
@@ -490,12 +512,16 @@ enum StatusItemPresentationSelfTest {
                 0,
                 Int(((StatusItemLayoutMetrics.richSingleQuotaBarRect.maxX + 1) * scaleX).rounded(.down))
             )
+            let endX = min(
+                bitmap.pixelsWide,
+                Int(((image.size.width - StatusItemLayoutMetrics.activityAccessoryWidth) * scaleX).rounded(.up))
+            )
             var minX = bitmap.pixelsWide
             var maxX = -1
             var minY = bitmap.pixelsHigh
             var maxY = -1
             for y in 0..<bitmap.pixelsHigh {
-                for x in startX..<bitmap.pixelsWide
+                for x in startX..<endX
                     where (bitmap.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.05 {
                     minX = min(minX, x)
                     maxX = max(maxX, x)

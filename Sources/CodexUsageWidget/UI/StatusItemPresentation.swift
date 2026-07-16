@@ -75,6 +75,7 @@ struct StatusItemMetricPresentation: Equatable, Identifiable {
 }
 
 struct StatusItemPresentation: Equatable {
+    let activityPhase: AgentActivityPhase
     let mode: StatusItemDisplayMode
     let quotaMode: QuotaDisplayMode
     let showsResetCountdown: Bool
@@ -104,6 +105,21 @@ enum StatusItemLayoutMetrics {
     static let minimalOuterRingLineWidth: CGFloat = 2.5
     static let minimalInnerRingLineWidth: CGFloat = 2.2
     static let minimalRingClearance: CGFloat = 0.75
+    static let activityTrafficLightSize = NSSize(width: 27, height: 13)
+    static let activityTrafficLightCornerRadius: CGFloat = 5
+    static let activityTrafficLightLampDiameter: CGFloat = 7
+    static let activityTrafficLightLampSpacing: CGFloat = 1.5
+    static let activitySeparatorLeadingSpacing: CGFloat = 4
+    static let activitySeparatorWidth: CGFloat = 1
+    static let activitySeparatorTrailingSpacing: CGFloat = 4
+    static let activityTrailingPadding: CGFloat = 1
+    static var activityAccessoryWidth: CGFloat {
+        activitySeparatorLeadingSpacing
+            + activitySeparatorWidth
+            + activitySeparatorTrailingSpacing
+            + activityTrafficLightSize.width
+            + activityTrailingPadding
+    }
     static let leadingContentWidth: CGFloat = 22
     static let classicQuotaUnitWidth: CGFloat = 23
     static let classicTokenUnitWidth: CGFloat = 54
@@ -150,11 +166,12 @@ enum StatusItemLayoutMetrics {
         let quotaCount = metrics.filter(\.isQuota).count
         let showsToday = metrics.contains { $0.metric == .todayTokens }
 
+        let contentWidth: CGFloat
         switch normalized.displayMode {
         case .minimal:
-            return minimalImageWidth
+            contentWidth = minimalImageWidth
         case .classic:
-            return leadingContentWidth
+            contentWidth = leadingContentWidth
                 + CGFloat(quotaCount + (showsNoActiveQuota ? 1 : 0)) * classicQuotaUnitWidth
                 + (showsToday ? classicTokenUnitWidth : 0)
                 + 2
@@ -163,10 +180,12 @@ enum StatusItemLayoutMetrics {
                 let quotaWidth = normalized.showsResetCountdown
                     && !showsNoActiveQuota ? richQuotaWidthWithReset
                     : richQuotaWidthWithoutReset
-                return quotaWidth + (showsToday ? richTokenExtensionWidth : 0)
+                contentWidth = quotaWidth + (showsToday ? richTokenExtensionWidth : 0)
+            } else {
+                contentWidth = showsToday ? richTokenOnlyWidth : richQuotaWidthWithoutReset
             }
-            return showsToday ? richTokenOnlyWidth : richQuotaWidthWithoutReset
         }
+        return contentWidth + activityAccessoryWidth
     }
 }
 
@@ -175,6 +194,7 @@ struct StatusItemPresentationBuilder {
         source: StatusItemSourceSnapshot,
         preferences: StatusItemPreferences,
         language: WidgetLanguage,
+        activityPhase: AgentActivityPhase = .idle,
         shortcutName: String? = GlobalShortcut.default.displayName,
         now: Date = Date()
     ) -> StatusItemPresentation {
@@ -230,6 +250,7 @@ struct StatusItemPresentationBuilder {
         }
 
         return StatusItemPresentation(
+            activityPhase: activityPhase,
             mode: preferences.displayMode,
             quotaMode: preferences.quotaMode,
             showsResetCountdown: preferences.showsResetCountdown,
@@ -238,8 +259,8 @@ struct StatusItemPresentationBuilder {
             itemLength: imageWidth + StatusItemLayoutMetrics.itemOuterPadding,
             showsNoActiveQuota: showsNoActiveQuota,
             metrics: metrics,
-            tooltip: "codexU · \(description) · \(action)",
-            accessibilityValue: description
+            tooltip: "codexU · \(activityPhase.localized(language)) · \(description) · \(action)",
+            accessibilityValue: "\(activityPhase.localized(language)) · \(description)"
         )
     }
 

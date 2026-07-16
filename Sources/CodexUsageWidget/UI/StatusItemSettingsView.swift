@@ -3,6 +3,7 @@ import SwiftUI
 struct StatusItemSettingsView: View {
     @ObservedObject var settings: AppSettings
     @ObservedObject var store: UsageStore
+    let activityPhase: AgentActivityPhase
     @State private var preferenceError: StatusItemPreferenceError?
     @Environment(\.visualTokens) private var visualTokens
 
@@ -12,7 +13,8 @@ struct StatusItemSettingsView: View {
     var body: some View {
         StatusItemPreviewRow(
             settings: settings,
-            store: store
+            store: store,
+            activityPhase: activityPhase
         )
 
         SettingsPickerRow(
@@ -165,6 +167,7 @@ struct StatusItemSettingsView: View {
 private struct StatusItemPreviewRow: View {
     @ObservedObject var settings: AppSettings
     @ObservedObject var store: UsageStore
+    let activityPhase: AgentActivityPhase
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.visualTokens) private var visualTokens
 
@@ -203,7 +206,8 @@ private struct StatusItemPreviewRow: View {
         builder.build(
             source: source,
             preferences: settings.statusItemPreferences,
-            language: settings.language
+            language: settings.language,
+            activityPhase: activityPhase
         )
     }
 

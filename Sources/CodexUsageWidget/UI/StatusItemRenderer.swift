@@ -76,8 +76,71 @@ struct StatusItemRenderer {
         case .rich:
             drawRich(presentation, tokens: tokens)
         }
+        drawActivityIndicator(presentation.activityPhase, in: presentation.imageSize)
 
         return image
+    }
+
+    private func drawActivityIndicator(
+        _ phase: AgentActivityPhase,
+        in imageSize: NSSize
+    ) {
+        let accessoryMinX = imageSize.width - StatusItemLayoutMetrics.activityAccessoryWidth
+        let separatorRect = NSRect(
+            x: accessoryMinX + StatusItemLayoutMetrics.activitySeparatorLeadingSpacing,
+            y: 5,
+            width: StatusItemLayoutMetrics.activitySeparatorWidth,
+            height: 12
+        )
+        NSColor.separatorColor.withAlphaComponent(0.72).setFill()
+        NSBezierPath(roundedRect: separatorRect, xRadius: 0.5, yRadius: 0.5).fill()
+
+        let origin = NSPoint(
+            x: imageSize.width
+                - StatusItemLayoutMetrics.activityTrailingPadding
+                - StatusItemLayoutMetrics.activityTrafficLightSize.width,
+            y: (imageSize.height - StatusItemLayoutMetrics.activityTrafficLightSize.height) / 2
+        )
+        let housingRect = NSRect(
+            origin: origin,
+            size: StatusItemLayoutMetrics.activityTrafficLightSize
+        )
+        NSColor.labelColor.withAlphaComponent(0.16).setFill()
+        NSBezierPath(
+            roundedRect: housingRect,
+            xRadius: StatusItemLayoutMetrics.activityTrafficLightCornerRadius,
+            yRadius: StatusItemLayoutMetrics.activityTrafficLightCornerRadius
+        ).fill()
+        NSColor.labelColor.withAlphaComponent(0.30).setStroke()
+        let border = NSBezierPath(
+            roundedRect: housingRect.insetBy(dx: 0.25, dy: 0.25),
+            xRadius: StatusItemLayoutMetrics.activityTrafficLightCornerRadius,
+            yRadius: StatusItemLayoutMetrics.activityTrafficLightCornerRadius
+        )
+        border.lineWidth = 0.5
+        border.stroke()
+
+        let lamps: [(color: NSColor, isActive: Bool)] = [
+            (.systemRed, phase == .requiresInput || phase == .failed),
+            (.systemYellow, phase == .running),
+            (.systemGreen, phase == .completed)
+        ]
+        let lampDiameter = StatusItemLayoutMetrics.activityTrafficLightLampDiameter
+        let spacing = StatusItemLayoutMetrics.activityTrafficLightLampSpacing
+        let lampsWidth = lampDiameter * CGFloat(lamps.count) + spacing * CGFloat(lamps.count - 1)
+        var x = housingRect.midX - lampsWidth / 2
+        let y = housingRect.midY - lampDiameter / 2
+
+        for lamp in lamps {
+            let lampRect = NSRect(x: x, y: y, width: lampDiameter, height: lampDiameter)
+            lamp.color.withAlphaComponent(lamp.isActive ? 1 : 0.22).setFill()
+            NSBezierPath(ovalIn: lampRect).fill()
+            NSColor.labelColor.withAlphaComponent(lamp.isActive ? 0.34 : 0.16).setStroke()
+            let lampBorder = NSBezierPath(ovalIn: lampRect.insetBy(dx: 0.2, dy: 0.2))
+            lampBorder.lineWidth = 0.4
+            lampBorder.stroke()
+            x += lampDiameter + spacing
+        }
     }
 
     private func drawMinimal(_ presentation: StatusItemPresentation, tokens: ResolvedVisualTokens) {
@@ -92,6 +155,7 @@ struct StatusItemRenderer {
             )
             return
         }
+
         let quotaMetrics = presentation.quotaMetrics
 
         for (index, metric) in quotaMetrics.prefix(2).enumerated() {

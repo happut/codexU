@@ -3954,6 +3954,7 @@ struct SettingsPanelView: View {
     @ObservedObject var settings: AppSettings
     @ObservedObject var store: UsageStore
     @ObservedObject var updateStore: AppUpdateStore
+    @ObservedObject var agentActivityStore: AgentActivityStore
     let onOpenPaletteLibrary: () -> Void
     @Environment(\.colorScheme) private var colorScheme
 
@@ -4092,7 +4093,29 @@ struct SettingsPanelView: View {
                     title: language.text("状态栏", "Menu Bar"),
                     detail: language.text("内容与显示密度", "Content and density")
                 ) {
-                    StatusItemSettingsView(settings: settings, store: store)
+                    StatusItemSettingsView(
+                        settings: settings,
+                        store: store,
+                        activityPhase: agentActivityStore.phase
+                    )
+
+                    SettingsToggleRow(
+                        title: language.text("Codex任务状态灯", "Codex agent status light"),
+                        detail: language.text(
+                            "黄灯表示即将调用工具，红灯表示等待确认，绿灯表示任务结束；启用后请重启Codex并通过/hooks确认信任",
+                            "Yellow means a tool call is starting, red means confirmation is required, and green means the task ended. Restart Codex and review the hook with /hooks after enabling"
+                        )
+                    ) {
+                        SettingsSwitchToggle(isOn: codexHookBinding)
+                    }
+
+                    if let error = agentActivityStore.configurationError {
+                        SettingsErrorRow(
+                            title: language.text("Codex hook配置失败", "Codex hook setup failed"),
+                            message: error,
+                            currentValue: language.text("状态灯仍保持原配置", "The previous status-light setup is unchanged")
+                        )
+                    }
                 }
 
                 settingsSection(
@@ -4207,6 +4230,13 @@ struct SettingsPanelView: View {
                 preference.selection = selection
                 store.updateStatisticsTimeZone(preference)
             }
+        )
+    }
+
+    private var codexHookBinding: Binding<Bool> {
+        Binding(
+            get: { agentActivityStore.codexHookInstalled },
+            set: { agentActivityStore.setCodexHookInstalled($0) }
         )
     }
 
@@ -9252,6 +9282,7 @@ final class MainAppWindow: NSWindow {
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPopoverDelegate {
     private let store = UsageStore()
+    private let agentActivityStore = AgentActivityStore()
     private let paletteCatalog = PaletteCatalog.loadFromMainBundle()
     private lazy var settings = AppSettings(paletteCatalog: paletteCatalog)
     private lazy var updateStore = AppUpdateStore(settings: settings)
@@ -9307,6 +9338,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         }
         store.updateVisibleRuntimeScopes(settings.visibleRuntimeScopes)
         store.start()
+        agentActivityStore.start()
         updateStore.startAutomaticCheck()
     }
 
@@ -9367,6 +9399,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         }
         unregisterGlobalHotKey()
         store.stop()
+        agentActivityStore.stop()
     }
 
     func toggleMainWindow() {
@@ -9576,6 +9609,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
                     settings: settings,
                     store: store,
                     updateStore: updateStore,
+                    agentActivityStore: agentActivityStore,
                     onOpenPaletteLibrary: { [weak self] in self?.openPaletteLibraryWindow() }
                 ),
                 cornerRadius: 20
@@ -9869,6 +9903,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
                 self?.updateStatusItem()
             }
             .store(in: &cancellables)
+
+        agentActivityStore.$phase
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.updateStatusItem()
+            }
+            .store(in: &cancellables)
     }
 
     private func updateStatusItem() {
@@ -9913,6 +9954,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
             source: source,
             preferences: settings.statusItemPreferences,
             language: settings.language,
+            activityPhase: agentActivityStore.phase,
             shortcutName: settings.globalShortcut?.displayName
         )
     }
@@ -10048,6 +10090,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
 @main
 struct codexUMain {
     static func main() {
+        if let hookExitCode = AgentActivityHookCommand.run() {
+            exit(hookExitCode)
+        }
+
         if CommandLine.arguments.contains("--self-test-global-shortcut") {
             exit(GlobalShortcutSelfTest.run() ? 0 : 1)
         }
@@ -10092,6 +10138,11 @@ struct codexUMain {
 
         if CommandLine.arguments.contains("--self-test-token-counter") {
             exit(CodexTokenCounterNormalizerSelfTest.run() ? 0 : 1)
+        }
+
+        if CommandLine.arguments.contains("--print-agent-status") {
+            print(AgentActivityStore.loadPhase(now: Date()).rawValue)
+            return
         }
 
         if CommandLine.arguments.contains("--dump-json") {
