@@ -1,5 +1,37 @@
 import Foundation
 
+enum QuotaWindowKind: String, Hashable {
+    case fiveHour
+    case sevenDay
+    case monthly
+}
+
+enum QuotaPaletteRole: Equatable {
+    case primary
+    case secondary
+}
+
+enum QuotaPaletteRoleResolver {
+    static func role(
+        for kind: QuotaWindowKind,
+        activeKinds: Set<QuotaWindowKind>
+    ) -> QuotaPaletteRole {
+        switch kind {
+        case .fiveHour:
+            return .primary
+        case .sevenDay:
+            return .secondary
+        case .monthly:
+            // Monthly has no dedicated Palette Package v1 role. It uses the
+            // long-period secondary role unless 7d already occupies it and
+            // the primary role is otherwise unused.
+            return activeKinds.contains(.sevenDay) && !activeKinds.contains(.fiveHour)
+                ? .primary
+                : .secondary
+        }
+    }
+}
+
 struct CodexNormalizedRateWindows: Equatable {
     let fiveHour: RateWindow?
     let sevenDay: RateWindow?

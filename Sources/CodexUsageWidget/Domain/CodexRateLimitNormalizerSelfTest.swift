@@ -59,6 +59,26 @@ enum CodexRateLimitNormalizerSelfTest {
         let sevenDay = window(usedPercent: 34, durationMins: 10_080)
         let monthly = window(usedPercent: 56, durationMins: 43_800)
 
+        expect(
+            QuotaPaletteRoleResolver.role(for: .fiveHour, activeKinds: [.fiveHour]) == .primary,
+            "5h must retain the primary Palette role"
+        )
+        expect(
+            QuotaPaletteRoleResolver.role(for: .sevenDay, activeKinds: [.sevenDay]) == .secondary,
+            "7d must retain the secondary Palette role even when displayed alone"
+        )
+        expect(
+            QuotaPaletteRoleResolver.role(for: .monthly, activeKinds: [.monthly]) == .secondary,
+            "monthly should use secondary when no 7d conflict exists"
+        )
+        expect(
+            QuotaPaletteRoleResolver.role(
+                for: .monthly,
+                activeKinds: [.sevenDay, .monthly]
+            ) == .primary,
+            "monthly should use the free primary fallback beside a 7d window"
+        )
+
         let standard = CodexRateLimitNormalizer.normalize([fiveHour, sevenDay])
         expect(standard.fiveHour == fiveHour, "standard response should classify the 300-minute window as 5h")
         expect(standard.sevenDay == sevenDay, "standard response should classify the 10080-minute window as 7d")
@@ -269,6 +289,10 @@ enum CodexRateLimitNormalizerSelfTest {
                 && retainedMonthly.snapshot.monthlyQuota == monthly,
             "a failed refresh must retain monthly quota in its own domain slot"
         )
+        expect(
+            RuntimeLegacyQuotaCompatibility.secondaryWindow(in: monthlyRuntime.snapshot) == nil,
+            "legacy JSON secondary must not contain a monthly quota"
+        )
 
         let bothLongRuntime = runtime(
             status: .available,
@@ -285,6 +309,10 @@ enum CodexRateLimitNormalizerSelfTest {
             retainedBothLong.snapshot.sevenDayQuota == sevenDay
                 && retainedBothLong.snapshot.monthlyQuota == monthly,
             "a failed refresh must retain simultaneous 7d and monthly windows"
+        )
+        expect(
+            RuntimeLegacyQuotaCompatibility.secondaryWindow(in: bothLongRuntime.snapshot) == sevenDay,
+            "legacy JSON secondary must keep its original 7d meaning when monthly also exists"
         )
 
         let authoritativeNoLimit = runtime(

@@ -1,5 +1,11 @@
 import Foundation
 
+enum RuntimeLegacyQuotaCompatibility {
+    static func secondaryWindow(in snapshot: UsageSnapshot) -> RateWindow? {
+        snapshot.sevenDayQuota
+    }
+}
+
 func dumpJSON(_ snapshot: MultiRuntimeUsageSnapshot) {
     let codexSnapshot = snapshot.runtime(for: .codex)?.snapshot
     var object: [String: Any] = [
@@ -62,7 +68,7 @@ private func runtimeLegacyJSONObject(_ snapshot: UsageSnapshot) -> [String: Any]
         object["primary"] = runtimeJSONObject(primary)
     }
 
-    if let secondary = snapshot.sevenDayQuota ?? snapshot.monthlyQuota {
+    if let secondary = RuntimeLegacyQuotaCompatibility.secondaryWindow(in: snapshot) {
         object["secondary"] = runtimeJSONObject(secondary)
     }
 

@@ -1,10 +1,5 @@
 import Cocoa
 
-enum StatusItemQuotaPaletteRole: Equatable {
-    case primary
-    case secondary
-}
-
 struct StatusItemSourceSnapshot: Equatable {
     let runtime: RuntimeScope
     let status: RuntimeMenuStatus
@@ -71,7 +66,7 @@ struct StatusItemMetricPresentation: Equatable, Identifiable {
     let value: String
     let compactValue: String
     let fraction: CGFloat?
-    let paletteRole: StatusItemQuotaPaletteRole?
+    let paletteRole: QuotaPaletteRole?
     let resetText: String?
     let isAvailable: Bool
 
@@ -303,7 +298,7 @@ struct StatusItemPresentationBuilder {
                 label: "5h",
                 remainingPercent: source.fiveHourRemainingPercent,
                 resetsAt: source.fiveHourResetsAt,
-                paletteRole: .primary,
+                paletteRole: paletteRole(for: .fiveHour, source: source),
                 preferences: preferences,
                 now: now
             )
@@ -313,7 +308,7 @@ struct StatusItemPresentationBuilder {
                 label: "7d",
                 remainingPercent: source.sevenDayRemainingPercent,
                 resetsAt: source.sevenDayResetsAt,
-                paletteRole: source.fiveHourRemainingPercent == nil ? .primary : .secondary,
+                paletteRole: paletteRole(for: .sevenDay, source: source),
                 preferences: preferences,
                 now: now
             )
@@ -323,8 +318,7 @@ struct StatusItemPresentationBuilder {
                 label: "mo",
                 remainingPercent: source.monthlyRemainingPercent,
                 resetsAt: source.monthlyResetsAt,
-                paletteRole: source.fiveHourRemainingPercent == nil
-                    && source.sevenDayRemainingPercent == nil ? .primary : .secondary,
+                paletteRole: paletteRole(for: .monthly, source: source),
                 preferences: preferences,
                 now: now
             )
@@ -348,7 +342,7 @@ struct StatusItemPresentationBuilder {
         label: String,
         remainingPercent: Double?,
         resetsAt: Date?,
-        paletteRole: StatusItemQuotaPaletteRole,
+        paletteRole: QuotaPaletteRole,
         preferences: StatusItemPreferences,
         now: Date
     ) -> StatusItemMetricPresentation {
@@ -374,6 +368,17 @@ struct StatusItemPresentationBuilder {
             resetText: resetText,
             isAvailable: remaining != nil
         )
+    }
+
+    private func paletteRole(
+        for kind: QuotaWindowKind,
+        source: StatusItemSourceSnapshot
+    ) -> QuotaPaletteRole {
+        var activeKinds: Set<QuotaWindowKind> = []
+        if source.fiveHourRemainingPercent != nil { activeKinds.insert(.fiveHour) }
+        if source.sevenDayRemainingPercent != nil { activeKinds.insert(.sevenDay) }
+        if source.monthlyRemainingPercent != nil { activeKinds.insert(.monthly) }
+        return QuotaPaletteRoleResolver.role(for: kind, activeKinds: activeKinds)
     }
 
     private func accessibilityDescription(

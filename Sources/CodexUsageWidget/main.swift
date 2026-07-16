@@ -4752,11 +4752,7 @@ private enum QuotaRingGeometry {
     static let center = CGPoint(x: outerDiameter / 2, y: outerDiameter / 2)
 }
 
-private enum QuotaWindowKind: String, Hashable {
-    case fiveHour
-    case sevenDay
-    case monthly
-
+private extension QuotaWindowKind {
     var compactTitle: String {
         switch self {
         case .fiveHour: "5h"
@@ -4764,13 +4760,9 @@ private enum QuotaWindowKind: String, Hashable {
         case .monthly: "mo"
         }
     }
-
 }
 
-private enum QuotaRingPaletteRole: Equatable {
-    case primary
-    case secondary
-
+private extension QuotaPaletteRole {
     func tokens(in visualTokens: ResolvedVisualTokens) -> QuotaRoleTokenSet {
         switch self {
         case .primary: visualTokens.quota.primary
@@ -4793,10 +4785,16 @@ private enum QuotaRingPaletteRole: Equatable {
     }
 }
 
+private enum QuotaRingPosition: Equatable {
+    case outer
+    case inner
+}
+
 private struct QuotaRingItem: Identifiable, Equatable {
     let kind: QuotaWindowKind
     let window: RateWindow
-    let paletteRole: QuotaRingPaletteRole
+    let paletteRole: QuotaPaletteRole
+    let position: QuotaRingPosition
 
     var id: QuotaWindowKind { kind }
 
@@ -4837,11 +4835,16 @@ private struct QuotaRingPresentation: Equatable {
         if let monthlyQuota {
             windows.append((.monthly, monthlyQuota))
         }
+        let activeKinds = Set(windows.map(\.0))
         self.items = windows.enumerated().map { index, entry in
             QuotaRingItem(
                 kind: entry.0,
                 window: entry.1,
-                paletteRole: index == 0 ? .primary : .secondary
+                paletteRole: QuotaPaletteRoleResolver.role(
+                    for: entry.0,
+                    activeKinds: activeKinds
+                ),
+                position: index == 0 ? .outer : .inner
             )
         }
     }
@@ -4890,7 +4893,7 @@ private struct QuotaRingPresentation: Equatable {
     }
 
     func diameter(for item: QuotaRingItem) -> CGFloat {
-        guard topology == .dual, item.paletteRole == .secondary else {
+        guard topology == .dual, item.position == .inner else {
             return QuotaRingGeometry.outerDiameter
         }
         return QuotaRingGeometry.innerDiameter
@@ -5817,6 +5820,11 @@ private enum QuotaParticleAnimationSelfTest {
             sevenDayQuota: fullSevenDay,
             monthlyQuota: nil
         )
+        let monthlyOnlyPresentation = QuotaRingPresentation(
+            fiveHourQuota: nil,
+            sevenDayQuota: nil,
+            monthlyQuota: fullMonthly
+        )
         let dualPresentation = QuotaRingPresentation(
             fiveHourQuota: fullFiveHour,
             sevenDayQuota: fullSevenDay,
@@ -5842,6 +5850,14 @@ private enum QuotaParticleAnimationSelfTest {
             "7d-only presentation should preserve the 7d semantic"
         )
         expect(
+            sevenDayOnlyPresentation.items.map(\.paletteRole) == [.secondary],
+            "7d-only presentation must preserve the quota.secondary identity"
+        )
+        expect(
+            monthlyOnlyPresentation.items.map(\.paletteRole) == [.secondary],
+            "monthly-only presentation should use the documented secondary fallback"
+        )
+        expect(
             sevenDayOnlyPresentation.particleLanes.count == 1
                 && sevenDayOnlyPresentation.particleLanes[0].radius == QuotaRingGeometry.outerRadius
                 && sevenDayOnlyPresentation.particleLanes[0].maximumCount == 17,
@@ -5853,9 +5869,14 @@ private enum QuotaParticleAnimationSelfTest {
             "dual presentation should retain the stable 5h then 7d order"
         )
         expect(
+            dualPresentation.items.map(\.paletteRole) == [.primary, .secondary],
+            "5h and 7d must preserve their Palette Package semantic identities"
+        )
+        expect(
             bothLongPresentation.items.map(\.kind) == [.sevenDay, .monthly]
-                && bothLongPresentation.items.map(\.paletteRole) == [.primary, .secondary],
-            "7d and monthly windows should both render with the current palette's two quota roles"
+                && bothLongPresentation.items.map(\.paletteRole) == [.secondary, .primary]
+                && bothLongPresentation.items.map(\.position) == [.outer, .inner],
+            "7d should remain secondary while monthly uses the free primary fallback independent of ring geometry"
         )
         expect(
             dualPresentation.activeRadii == [
@@ -5867,6 +5888,7 @@ private enum QuotaParticleAnimationSelfTest {
         expect(
             fiveHourOnlyPresentation.items.count == 1
                 && sevenDayOnlyPresentation.items.count == 1
+                && monthlyOnlyPresentation.items.count == 1
                 && dualPresentation.items.count == 2
                 && bothLongPresentation.items.count == 2,
             "reset summary should receive only real quota rows"

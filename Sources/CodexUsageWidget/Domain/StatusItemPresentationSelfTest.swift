@@ -189,8 +189,8 @@ enum StatusItemPresentationSelfTest {
             "the surviving single quota should be 7d"
         )
         expect(
-            sevenDayOnly.quotaMetrics.first?.paletteRole == .primary,
-            "a single 7d quota should use the primary ring palette"
+            sevenDayOnly.quotaMetrics.first?.paletteRole == .secondary,
+            "a single 7d quota must preserve its secondary Palette identity"
         )
         expect(!sevenDayOnly.tooltip.contains("5h"), "tooltip should omit a collapsed 5h quota")
         expect(
@@ -218,6 +218,10 @@ enum StatusItemPresentationSelfTest {
         expect(
             monthlyOnly.quotaMetrics.first?.label == "mo",
             "monthly long-period quota should use the mo status-item label"
+        )
+        expect(
+            monthlyOnly.quotaMetrics.first?.paletteRole == .secondary,
+            "monthly-only status should use the documented secondary fallback"
         )
         expect(
             monthlyOnly.tooltip.contains("月额度"),
@@ -255,8 +259,8 @@ enum StatusItemPresentationSelfTest {
             "7d and monthly quotas should both remain visible when returned together"
         )
         expect(
-            bothLong.quotaMetrics.map(\.paletteRole) == [.primary, .secondary],
-            "7d and monthly status metrics should use distinct current-palette roles"
+            bothLong.quotaMetrics.map(\.paletteRole) == [.secondary, .primary],
+            "7d should remain secondary while monthly uses the free primary fallback"
         )
 
         var disappearedSelection = StatusItemPreferences.default
