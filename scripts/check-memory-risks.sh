@@ -53,6 +53,7 @@ count_regex() {
 forbid_regex 'readabilityHandler|availableData' '发现 FileHandle readabilityHandler/availableData；必须改为有背压和 EOF 退出的有界读取循环'
 forbid_regex 'readDataToEndOfFile' '发现无界 readDataToEndOfFile；必须改为分块且设总量上限的读取'
 forbid_regex 'standardError[[:space:]]*=[[:space:]]*Pipe\(' '发现未证明会被排空的 stderr Pipe；必须消费或重定向到 nullDevice'
+forbid_regex 'read\(upToCount: self\.maximumReadChunkBytes\)' '发现 app-server 使用 Foundation 定长 pipe 读取；长连接必须使用能立即返回部分数据的 POSIX read'
 
 repeating_timers="$(rg -n 'Timer\.scheduledTimer\(.*repeats: true' Sources/CodexUsageWidget -g '*.swift' || true)"
 if [[ -n "$repeating_timers" ]]; then
@@ -66,7 +67,19 @@ fi
 require_literal Sources/CodexUsageWidget/Services/CodexAppServerTaskClient.swift \
   'private let maximumOutputBufferBytes' 'app-server 流缺少明确的缓冲区上限'
 require_literal Sources/CodexUsageWidget/Services/CodexAppServerTaskClient.swift \
-  'read(upToCount: self.maximumReadChunkBytes)' 'app-server 流没有使用分块读取'
+  'POSIXPipeReader.readChunk(' 'app-server 长连接没有使用可返回部分数据的 POSIX 分块读取'
+require_literal Sources/CodexUsageWidget/Services/CodexAppServerTaskClient.swift \
+  'maximumBytes: self.maximumReadChunkBytes' 'app-server 长连接读取没有使用受控分块上限'
+require_literal Sources/CodexUsageWidget/Services/CodexAppServerTaskClient.swift \
+  'Darwin.read(descriptor' 'app-server pipe reader 没有使用 POSIX read 语义'
+require_literal Sources/CodexUsageWidget/main.swift \
+  'POSIXPipeReader.readChunk(' '一次性额度读取没有使用可返回部分数据的 POSIX 分块读取'
+require_literal Sources/CodexUsageWidget/main.swift \
+  'from: outputDescriptor' '一次性额度读取没有连接到独立的 POSIX pipe descriptor'
+require_literal Sources/CodexUsageWidget/main.swift \
+  '--self-test-app-server-pipe' '缺少 app-server 部分响应读取自测入口'
+require_literal scripts/build-release-artifacts.sh \
+  '--self-test-app-server-pipe' '发布包装没有执行 app-server 部分响应读取回归测试'
 require_literal Sources/CodexUsageWidget/Services/CodexAppServerTaskClient.swift \
   'pendingThreadListIDs.isEmpty' 'thread/list 缺少单一在途请求约束'
 require_literal Sources/CodexUsageWidget/Services/CodexAppServerTaskClient.swift \
@@ -115,6 +128,7 @@ parent_traversal_count="$(count_regex 'deletingLastPathComponent\(\)')"
   fi
   printf '## 自动阻断检查\n\n'
   printf -- '- 异步 FileHandle EOF 与无背压读取：已扫描\n'
+  printf -- '- app-server pipe 部分响应与 EOF 读取语义：已扫描\n'
   printf -- '- 无界整文件/整进程输出读取：已扫描\n'
   printf -- '- 未排空 stderr Pipe：已扫描\n'
   printf -- '- 重复 Timer 强引用：已扫描\n'

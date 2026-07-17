@@ -74,7 +74,7 @@ make memory-risk-check
 sed -n '1,240p' build/memory-risk/report.md
 ```
 
-This mandatory gate scans the full production source tree for unbounded stream reads, process-pipe lifecycle errors, repeating callback retention, missing observer cleanup, unbounded caches or pending-request collections, and parent-path traversal without explicit root termination or cycle guards. Review the generated inventory before continuing. A failure blocks all later release work and must not be bypassed.
+This mandatory gate scans the full production source tree for unbounded stream reads, app-server pipe reads that wait for a full fixed-size buffer instead of returning partial responses, process-pipe lifecycle errors, repeating callback retention, missing observer cleanup, unbounded caches or pending-request collections, and parent-path traversal without explicit root termination or cycle guards. Review the generated inventory before continuing. A failure blocks all later release work and must not be bypassed.
 
 ```sh
 make release-package

@@ -16,6 +16,76 @@ protocol CodexTaskEventClient: AnyObject {
     func refreshThreads()
 }
 
+enum POSIXPipeReaderError: Error {
+    case duplicateFailed(Int32)
+    case readFailed(Int32)
+}
+
+enum POSIXPipeReader {
+    static func duplicateDescriptor(for handle: FileHandle) throws -> Int32 {
+        let descriptor = Darwin.dup(handle.fileDescriptor)
+        guard descriptor >= 0 else { throw POSIXPipeReaderError.duplicateFailed(errno) }
+        return descriptor
+    }
+
+    /// Foundation's `read(upToCount:)` may wait for the full requested length on
+    /// a pipe. POSIX read returns as soon as any bytes are available, which is
+    /// required for long-lived app-server streams that intentionally keep stdout open.
+    static func readChunk(from descriptor: Int32, maximumBytes: Int) throws -> Data? {
+        precondition(maximumBytes > 0)
+        var bytes = [UInt8](repeating: 0, count: maximumBytes)
+        while true {
+            let count = bytes.withUnsafeMutableBytes { buffer in
+                Darwin.read(descriptor, buffer.baseAddress, buffer.count)
+            }
+            if count > 0 { return Data(bytes.prefix(Int(count))) }
+            if count == 0 { return nil }
+            let code = errno
+            if code == EINTR { continue }
+            throw POSIXPipeReaderError.readFailed(code)
+        }
+    }
+}
+
+enum POSIXPipeReaderSelfTest {
+    static func run() -> Bool {
+        let pipe = Pipe()
+        let reader = pipe.fileHandleForReading
+        let writer = pipe.fileHandleForWriting
+        guard let descriptor = try? POSIXPipeReader.duplicateDescriptor(for: reader) else {
+            print("POSIX pipe reader self-test failed: could not duplicate descriptor")
+            return false
+        }
+        defer {
+            Darwin.close(descriptor)
+            try? reader.close()
+            try? writer.close()
+        }
+
+        let payload = Data("partial response\n".utf8)
+        do {
+            try writer.write(contentsOf: payload)
+            let startedAt = Date()
+            let result = try POSIXPipeReader.readChunk(from: descriptor, maximumBytes: 64 * 1_024)
+            guard result == payload, Date().timeIntervalSince(startedAt) < 1 else {
+                print("POSIX pipe reader self-test failed: partial response was not returned promptly")
+                return false
+            }
+            try writer.close()
+            guard try POSIXPipeReader.readChunk(from: descriptor, maximumBytes: 64 * 1_024) == nil else {
+                print("POSIX pipe reader self-test failed: EOF was not detected")
+                return false
+            }
+        } catch {
+            print("POSIX pipe reader self-test failed: \(error)")
+            return false
+        }
+
+        print("POSIX pipe reader self-test passed")
+        return true
+    }
+}
+
 final class CodexAppServerTaskClient: CodexTaskEventClient {
     var onSnapshot: ((CodexTaskLiveSnapshot) -> Void)?
 
@@ -143,7 +213,10 @@ final class CodexAppServerTaskClient: CodexTaskEventClient {
         self.process = process
         inputHandle = input.fileHandleForWriting
         outputHandle = output.fileHandleForReading
-        startReadLoop(handle: output.fileHandleForReading, generation: generation)
+        guard startReadLoop(handle: output.fileHandleForReading, generation: generation) else {
+            stopProcess()
+            return
+        }
 
         guard writeJSONObject([
             "id": initializeRequestID,
@@ -172,13 +245,19 @@ final class CodexAppServerTaskClient: CodexTaskEventClient {
         queue.asyncAfter(deadline: .now() + 8, execute: timeout)
     }
 
-    private func startReadLoop(handle: FileHandle, generation: UInt64) {
+    private func startReadLoop(handle: FileHandle, generation: UInt64) -> Bool {
+        guard let descriptor = try? POSIXPipeReader.duplicateDescriptor(for: handle) else {
+            return false
+        }
         readerQueue.async { [weak self] in
+            defer { Darwin.close(descriptor) }
             while let self {
                 let data: Data
                 do {
-                    guard let next = try handle.read(upToCount: self.maximumReadChunkBytes),
-                          !next.isEmpty else { break }
+                    guard let next = try POSIXPipeReader.readChunk(
+                        from: descriptor,
+                        maximumBytes: self.maximumReadChunkBytes
+                    ) else { break }
                     data = next
                 } catch {
                     break
@@ -197,6 +276,7 @@ final class CodexAppServerTaskClient: CodexTaskEventClient {
                 self?.handleDisconnect(generation: generation)
             }
         }
+        return true
     }
 
     @discardableResult

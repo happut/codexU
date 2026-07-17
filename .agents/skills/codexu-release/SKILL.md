@@ -48,7 +48,7 @@ The scan covers the entire production source tree, not only the release diff. Tr
 
 Do not accept the PASS line without reviewing the generated global inventory. Inspect every reported risk category and the related release diff, with particular attention to:
 
-- `Process` and `Pipe`: bounded stdout reads, drained or redirected stderr, EOF handling, timeout, termination, and forced cleanup.
+- `Process` and `Pipe`: bounded stdout reads with partial-response semantics for long-lived pipes, drained or redirected stderr, EOF handling, timeout, termination, and forced cleanup.
 - `Timer`, notification/KVO observers, event monitors, and Combine subscriptions: weak captures and matching invalidation/removal/cancellation.
 - buffers, caches, samples, pending request maps, and static mutable collections: byte/count limits, eviction, timeout, and working-set release.
 - `Data(contentsOf:)` and transcript/session readers: trusted input boundaries, file-size checks, streaming behavior, and oversized-record handling.

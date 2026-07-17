@@ -1299,16 +1299,31 @@ final class CodexUsageReader {
         }
 
         let outputHandle = output.fileHandleForReading
+        guard let outputDescriptor = try? POSIXPipeReader.duplicateDescriptor(for: outputHandle) else {
+            writeLock.lock()
+            acceptsWrites = false
+            try? inputHandle.close()
+            writeLock.unlock()
+            terminate(process)
+            try? outputHandle.close()
+            messages.append("app-server 输出读取失败")
+            return AppServerSnapshot()
+        }
         let readerGroup = DispatchGroup()
         let maximumOutputBufferBytes = 1 * 1_024 * 1_024
         readerGroup.enter()
         DispatchQueue.global(qos: .utility).async {
-            defer { readerGroup.leave() }
+            defer {
+                Darwin.close(outputDescriptor)
+                readerGroup.leave()
+            }
             while true {
                 let data: Data
                 do {
-                    guard let next = try outputHandle.read(upToCount: 64 * 1_024),
-                          !next.isEmpty else { break }
+                    guard let next = try POSIXPipeReader.readChunk(
+                        from: outputDescriptor,
+                        maximumBytes: 64 * 1_024
+                    ) else { break }
                     data = next
                 } catch {
                     break
@@ -9530,6 +9545,7 @@ private func localizedReaderMessage(_ message: String, language: WidgetLanguage)
     if message.contains("未找到 codex") { return "Codex executable not found" }
     if message.contains("app-server 启动失败") { return "Failed to start app-server" }
     if message.contains("app-server 响应超时") { return "app-server response timed out" }
+    if message.contains("app-server 输出读取失败") { return "Failed to read app-server output" }
     if message.contains("未找到 Codex state_5.sqlite") { return "Codex state_5.sqlite not found" }
     if message.contains("未找到 sqlite3") { return "sqlite3 not found" }
     if message.contains("SQLite 查询失败") { return "SQLite query failed" }
@@ -10804,6 +10820,10 @@ struct codexUMain {
 
         if CommandLine.arguments.contains("--self-test-token-counter") {
             exit(CodexTokenCounterNormalizerSelfTest.run() ? 0 : 1)
+        }
+
+        if CommandLine.arguments.contains("--self-test-app-server-pipe") {
+            exit(POSIXPipeReaderSelfTest.run() ? 0 : 1)
         }
 
         if CommandLine.arguments.contains("--self-test-task-runtime") {
